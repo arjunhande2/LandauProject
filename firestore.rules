@@ -2,12 +2,12 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only users created in Firebase Authentication can view or change inventory.
-    match /inventory/{partDocument} {
-      allow read, write: if request.auth != null;
+    // Public inventory version: anyone with the site can read and modify this collection.
+    match /inventory/{document=**} {
+      allow read, write: if true;
     }
 
-    // Deny access to every other collection by default.
+    // Keep every unrelated collection blocked.
     match /{document=**} {
       allow read, write: if false;
     }

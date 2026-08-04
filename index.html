@@ -973,7 +973,7 @@
 
           <div class="privacy-note">
             <div class="privacy-icon" aria-hidden="true">✓</div>
-            <div>Image recognition runs in this browser. Only inventory records are uploaded when an authorized user chooses to sync them from the database portal.</div>
+            <div>Image recognition runs in this browser. Inventory records are uploaded only when a user chooses to synchronize the active sheet with the public database portal.</div>
           </div>
         </div>
       </section>
@@ -1026,7 +1026,8 @@
       const STORAGE_KEY = 'part-serial-scanner-results-v2';
       const LEGACY_STORAGE_KEY = 'part-number-scanner-results-v1';
       const MAX_IMAGE_DIMENSION = 2200;
-      const MAX_STORED_OCR_CHARS = 1200;
+      const MAX_STORED_OCR_CHARS = 2400;
+      const MAX_SHARPEN_PIXELS = 3200000;
 
       // Central application state keeps queued images, grouped inventory records, and the OCR worker.
       const state = {
@@ -1081,39 +1082,39 @@
         return new Date(first) >= new Date(second) ? first : second;
       }
 
-      // Validate part and serial values while preserving complete industrial and hexadecimal identifiers.
+      // Validate identifiers while preserving full industrial, grouped, and hexadecimal values.
       function cleanIdentifier(raw, type = 'part') {
         let value = String(raw || '')
           .toUpperCase()
-          .replace(/[‐‑‒–—]/g, '-')
+          .replace(/[‐‑‒–—−]/g, '-')
+          .replace(/[|¦]/g, 'I')
           .trim();
 
-        if (type === 'serial') {
-          value = value
-            .replace(/^\s*(?:HEX(?:ADECIMAL)?)\s*[:=]?\s*/i, '')
-            .replace(/^[^A-Z0-9]+/, '')
-            .replace(/[^A-Z0-9._/:\s-]+$/, '')
-            .replace(/\s*([._/:-])\s*/g, '$1')
-            .replace(/\s+/g, ' ')
-            .trim();
+        value = value
+          .replace(/^\s*(?:VALUE|CODE|ID)\s*[:=]?\s*/i, '')
+          .replace(/^\s*(?:HEX(?:ADECIMAL)?)\s*[:=]?\s*/i, '')
+          .replace(/^[^A-Z0-9]+/, '')
+          .replace(/[^A-Z0-9._/:+\s-]+$/, '')
+          .replace(/\s*([._/:+\-])\s*/g, '$1')
+          .replace(/\s+/g, ' ')
+          .replace(/([._/:+\-]){2,}/g, '$1')
+          .trim();
 
-          if (value.length < 2 || value.length > 120) return '';
-          if (!/^[A-Z0-9][A-Z0-9._/: -]*$/.test(value)) return '';
-          if (!/[A-Z0-9]/.test(value)) return '';
-          if (/^(NO|NUMBER|NUM|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION|HEX|HEXADECIMAL)$/.test(value)) return '';
+        const rejectedWords = /^(?:NO|NUMBER|NUM|PART|ITEM|CATALOG|CAT|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION|CODE|VALUE|HEX|HEXADECIMAL|REV|REVISION)$/;
+        if (!value || rejectedWords.test(value)) return '';
+        if (!/^[A-Z0-9][A-Z0-9._/:+ -]*$/.test(value)) return '';
+
+        if (type === 'serial') {
+          if (value.length < 2 || value.length > 160) return '';
+          // A serial can be decimal, alphanumeric, or entirely hexadecimal letters.
+          if (!/\d/.test(value) && !(/^(?:0X)?[A-F0-9]{2,}(?:[._/:+ -][A-F0-9]+)*$/.test(value) && value.replace(/[^A-F0-9]/g, '').length >= 4)) return '';
           return value;
         }
 
-        value = value
-          .replace(/^[^A-Z0-9]+/, '')
-          .replace(/[^A-Z0-9._/-]+$/, '')
-          .replace(/\.{2,}/g, '.')
-          .trim();
-
-        if (value.length < 2 || value.length > 40) return '';
-        if (!/\d/.test(value)) return '';
-        if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(value)) return '';
-        if (/^(NO|NUMBER|NUM|PART|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION)$/.test(value)) return '';
+        if (value.length < 2 || value.length > 80) return '';
+        // Most part numbers contain a digit. Letter-only codes are accepted when they are structured.
+        const structuredLettersOnly = value.length >= 4 && /[._/:+ -]/.test(value);
+        if (!/\d/.test(value) && !structuredLettersOnly) return '';
         return value;
       }
 
@@ -1125,7 +1126,11 @@
         return cleanIdentifier(raw, 'serial');
       }
 
-      // Ignore formatting separators when deciding whether two serial values are identical.
+      // Ignore punctuation and spacing when matching the same identifier across OCR passes.
+      function partCanonicalKey(value) {
+        return cleanPartCandidate(value).replace(/[^A-Z0-9]/g, '');
+      }
+
       function serialCanonicalKey(value) {
         return cleanSerialCandidate(value).replace(/[^A-Z0-9]/g, '');
       }
@@ -1179,7 +1184,7 @@
           const entryTimestamp = validIsoDate(entry.lastSeen || entry.timestamp || entry.firstSeen);
           const entryFirstSeen = validIsoDate(entry.firstSeen || entry.timestamp || entryTimestamp, entryTimestamp);
           const quantity = Math.max(1, Math.floor(Number(entry.quantity) || 1));
-          let part = grouped.find(record => record.partNumber.toUpperCase() === partNumber.toUpperCase());
+          let part = grouped.find(record => partCanonicalKey(record.partNumber) === partCanonicalKey(partNumber));
 
           if (!part) {
             part = {
@@ -1517,6 +1522,25 @@
               pixels[i + 2] = inverted;
             }
           }
+
+          // A light five-point sharpening pass improves engraved or low-contrast characters.
+          if (mode === 'auto' && total <= MAX_SHARPEN_PIXELS && width > 2 && height > 2) {
+            const original = new Uint8ClampedArray(pixels);
+            for (let y = 1; y < height - 1; y += 1) {
+              for (let x = 1; x < width - 1; x += 1) {
+                const index = (y * width + x) * 4;
+                const sharpened = 5 * original[index]
+                  - original[index - 4]
+                  - original[index + 4]
+                  - original[index - width * 4]
+                  - original[index + width * 4];
+                const value = Math.max(0, Math.min(255, sharpened));
+                pixels[index] = value;
+                pixels[index + 1] = value;
+                pixels[index + 2] = value;
+              }
+            }
+          }
         }
 
         context.putImageData(imageData, 0, 0);
@@ -1565,160 +1589,238 @@
         return threshold;
       }
 
-      // Standardize punctuation and spacing so OCR output is easier to search.
+      // Standardize OCR punctuation and spacing without changing identifier characters globally.
       function normalizeOcrText(text) {
         return String(text || '')
-          .replace(/[‐‑‒–—]/g, '-')
+          .replace(/[‐‑‒–—−]/g, '-')
           .replace(/[“”]/g, '"')
           .replace(/[‘’]/g, "'")
           .replace(/\r/g, '')
           .replace(/[\t ]+/g, ' ')
+          .replace(/\s*([:=#])\s*/g, '$1')
           .replace(/\n{3,}/g, '\n\n')
           .trim();
       }
 
-      // Build patterns for common part-number labels and OCR variations.
+      // Label patterns include common abbreviations and OCR substitutions such as 0/O, 1/I, and 4/A.
       function getPartLabelRegex(mode, flags = 'i') {
         if (mode === 'strict') {
-          return new RegExp('\\bP[A4]RT\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
+          return new RegExp('\\bP[A4]R[T7]\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
         }
-        return new RegExp('(?:\\bP[A4]RT\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM|#)|\\bP\\s*[/\\-]\\s*N\\b)\\s*[:;=#.\\-]?', flags);
+        return new RegExp(
+          '(?:\\bP[A4]R[T7]\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM(?:BER)?|#)'
+          + '|\\bP\\s*[/\\-]\\s*N\\b'
+          + '|\\bP\\.?\\s*N\\.?\\s*(?=[:=#\\-]|\\s+[A-Z0-9])'
+          + '|\\bITEM\\s*(?:N(?:O|0)\\.?|NUMBER|#)'
+          + '|\\bCAT(?:ALOG)?\\s*(?:N(?:O|0)\\.?|NUMBER|#)'
+          + '|\\bPRT\\s*(?:N(?:O|0)\\.?|NUMBER|#))\\s*[:;=#.\\-]?',
+          flags
+        );
       }
 
-      // Build patterns for Serial No., Serial Number, Serial #, S/N, and SN labels.
       function getSerialLabelRegex(mode, flags = 'i') {
         if (mode === 'strict') {
-          return new RegExp('\\bSER(?:IAL|1AL)\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
+          return new RegExp('\\bSER(?:IAL|1AL|I[AI]L)\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
         }
-        return new RegExp('(?:\\bSER(?:IAL|1AL)\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM|#)|\\bS\\s*[/\\-]\\s*N\\b|\\bS\\.?N\\.?\\s*[:=#])\\s*[:;=#.\\-]?', flags);
+        return new RegExp(
+          '(?:\\bSER(?:IAL|1AL|I[AI]L)\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM(?:BER)?|#|ID|CODE)'
+          + '|\\bSER\\s*(?:N(?:O|0)\\.?|#)'
+          + '|\\bS\\s*[/\\-]\\s*N\\b'
+          + '|\\bS\\.?\\s*N\\.?\\s*(?=[:=#\\-]|\\s+[A-Z0-9]))\\s*[:;=#.\\-]?',
+          flags
+        );
       }
 
-      // Decide whether a token is likely to be part of a full serial value.
-      function isSerialChunk(token) {
+      const FIELD_WORDS = new Set([
+        'NO', 'NUMBER', 'NUM', 'QTY', 'QUANTITY', 'DATE', 'LOT', 'BATCH', 'SERIAL',
+        'MODEL', 'DESC', 'DESCRIPTION', 'MADE', 'CANADA', 'USA', 'COUNTRY', 'MFG',
+        'MANUFACTURED', 'REV', 'REVISION', 'VERSION', 'VOLTAGE', 'CURRENT', 'WEIGHT'
+      ]);
+
+      function fieldStopRegex() {
+        return /\b(?:QTY|QUANTITY|P[A4]R[T7]|P\s*[/\-]\s*N|ITEM\s*(?:NO|NUMBER)|CAT(?:ALOG)?\s*(?:NO|NUMBER)|SER(?:IAL|1AL)|SER\s*(?:NO|#)|S\s*[/\-]\s*N|LOT|BATCH|DATE|DESCRIPTION|DESC|MODEL|MFG|MANUFACTURED|REV(?:ISION)?|VERSION|MADE\s+IN)\b/i;
+      }
+
+      function identifierTokens(segment) {
+        return String(segment || '').match(/(?:0X)?[A-Z0-9]+(?:[._/:+\-][A-Z0-9]+)*/gi) || [];
+      }
+
+      function isIdentifierChunk(token, type) {
         const compact = String(token || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-        if (!compact || compact.length > 64) return false;
-        if (/^(NO|NUMBER|NUM|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION|MADE|CANADA|USA)$/.test(compact)) return false;
-        return /\d/.test(compact) || /[._/:-]/.test(token) || /^(?:0X)?[A-F0-9]{2,}$/.test(compact);
+        if (!compact || compact.length > 96 || FIELD_WORDS.has(compact)) return false;
+        if (type === 'serial') {
+          return /\d/.test(compact) || /[._/:+\-]/.test(token) || /^(?:0X)?[A-F0-9]{2,}$/.test(compact);
+        }
+        return /\d/.test(compact) || (compact.length >= 4 && /[._/:+\-]/.test(token));
       }
 
-      // Read the complete serial sequence after a label, including grouped or hexadecimal values.
+      // Preserve all serial groups after the label, including spaces and complete hexadecimal strings.
       function fullSerialCandidate(segment) {
-        let stopped = String(segment || '').replace(/^\s*[:;=#.-]+\s*/, '');
-        const stopRegex = /\b(?:QTY|QUANTITY|P[A4]RT|P\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
-        const stopMatch = stopRegex.exec(stopped);
+        let stopped = String(segment || '').replace(/^\s*[:;=#.\-]+\s*/, '');
+        const stopMatch = fieldStopRegex().exec(stopped);
         if (stopMatch) stopped = stopped.slice(0, stopMatch.index);
         stopped = stopped.replace(/^\s*(?:HEX(?:ADECIMAL)?)\s*[:=]?\s*/i, '');
 
-        const tokens = stopped.match(/[A-Z0-9]+(?:[._/:\-][A-Z0-9]+)*/gi) || [];
+        const tokens = identifierTokens(stopped);
         const accepted = [];
         for (const token of tokens) {
-          if (!isSerialChunk(token)) {
+          if (!isIdentifierChunk(token, 'serial')) {
             if (accepted.length) break;
             continue;
           }
           accepted.push(token);
+          if (accepted.length >= 12) break;
         }
-
         return cleanSerialCandidate(accepted.join(' '));
       }
 
-      // Read the first valid identifier after a detected label and stop at the next field label.
-      function firstCandidate(segment, type) {
-        if (type === 'serial') return fullSerialCandidate(segment);
-
-        let stopped = String(segment || '').replace(/^\s*[:;=#.-]+\s*/, '');
-        const stopRegex = /\b(?:QTY|QUANTITY|SER(?:IAL|1AL)|S\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
-        const stopMatch = stopRegex.exec(stopped);
+      function fullPartCandidate(segment) {
+        let stopped = String(segment || '').replace(/^\s*[:;=#.\-]+\s*/, '');
+        const stopMatch = fieldStopRegex().exec(stopped);
         if (stopMatch) stopped = stopped.slice(0, stopMatch.index);
 
-        const tokens = stopped.match(/[A-Z0-9][A-Z0-9._/\-]{1,59}/gi) || [];
+        const tokens = identifierTokens(stopped);
+        const accepted = [];
         for (const token of tokens) {
-          const candidate = cleanPartCandidate(token);
-          if (candidate) return candidate;
+          if (!isIdentifierChunk(token, 'part')) {
+            if (accepted.length) break;
+            continue;
+          }
+          accepted.push(token);
+          // Parts are usually one token, but grouped codes such as "12 345 AB" are retained.
+          if (accepted.length >= 4) break;
         }
-        return '';
+        return cleanPartCandidate(accepted.join(' '));
       }
 
-      // Continue a serial onto following OCR lines only when those lines contain serial-like chunks.
-      function extendSerialAcrossLines(lines, startIndex, initialSegment, mode) {
-        let combined = String(initialSegment || '').trim();
-        for (let lookAhead = startIndex + 1; lookAhead < Math.min(lines.length, startIndex + 4); lookAhead += 1) {
-          const nextLine = lines[lookAhead];
-          if (lineContainsAnyLabel(nextLine, mode)) break;
-          const continuation = fullSerialCandidate(nextLine);
-          if (!continuation) break;
-          combined = `${combined} ${continuation}`.trim();
-        }
-        return fullSerialCandidate(combined);
+      function firstCandidate(segment, type) {
+        return type === 'serial' ? fullSerialCandidate(segment) : fullPartCandidate(segment);
       }
 
       function lineContainsAnyLabel(line, mode) {
         return getPartLabelRegex(mode, 'i').test(line) || getSerialLabelRegex(mode, 'i').test(line);
       }
 
-      // Search OCR lines and a flattened fallback for one category of label and value.
+      function extendCandidateAcrossLines(lines, startIndex, initialSegment, mode, type) {
+        let combined = String(initialSegment || '').trim();
+        const maxLookAhead = type === 'serial' ? 4 : 2;
+        for (let lookAhead = startIndex + 1; lookAhead < Math.min(lines.length, startIndex + maxLookAhead); lookAhead += 1) {
+          const nextLine = lines[lookAhead];
+          if (lineContainsAnyLabel(nextLine, mode) || fieldStopRegex().test(nextLine)) break;
+          const continuation = firstCandidate(nextLine, type);
+          if (!continuation) break;
+          combined = `${combined} ${continuation}`.trim();
+          // A complete single-line value should not absorb unrelated lines unless it looks grouped.
+          if (type === 'part' || combined.length > 120) break;
+        }
+        return firstCandidate(combined, type);
+      }
+
+      function canonicalForType(value, type) {
+        return type === 'serial' ? serialCanonicalKey(value) : partCanonicalKey(value);
+      }
+
+      function dedupeOccurrences(occurrences, type) {
+        const byKey = new Map();
+        for (const occurrence of occurrences) {
+          const key = canonicalForType(occurrence.value, type);
+          if (!key) continue;
+          const existing = byKey.get(key);
+          if (!existing || occurrence.value.length > existing.value.length) byKey.set(key, occurrence);
+        }
+        return [...byKey.values()];
+      }
+
+      // Search every label occurrence on every OCR line, then use a flattened fallback for broken layouts.
       function extractValuesForLabel(normalizedText, mode, type) {
         const lines = normalizedText.split('\n').map(line => line.trim()).filter(Boolean);
-        const values = [];
+        const occurrences = [];
         let labelFound = false;
         const labelFactory = type === 'serial' ? getSerialLabelRegex : getPartLabelRegex;
-        const singleLabelRegex = labelFactory(mode, 'i');
 
         for (let index = 0; index < lines.length; index += 1) {
           const line = lines[index];
-          const match = singleLabelRegex.exec(line);
-          if (!match) continue;
+          const lineRegex = labelFactory(mode, 'gi');
+          let match;
+          while ((match = lineRegex.exec(line)) !== null) {
+            labelFound = true;
+            const afterLabel = line.slice(match.index + match[0].length);
+            let candidate = extendCandidateAcrossLines(lines, index, afterLabel, mode, type);
 
-          labelFound = true;
-          const afterLabel = line.slice(match.index + match[0].length);
-          let candidate = type === 'serial'
-            ? extendSerialAcrossLines(lines, index, afterLabel, mode)
-            : firstCandidate(afterLabel, type);
-
-          if (!candidate) {
-            for (let lookAhead = index + 1; lookAhead < Math.min(lines.length, index + 4); lookAhead += 1) {
-              if (lineContainsAnyLabel(lines[lookAhead], mode)) break;
-              candidate = type === 'serial'
-                ? extendSerialAcrossLines(lines, lookAhead, lines[lookAhead], mode)
-                : firstCandidate(lines[lookAhead], type);
-              if (candidate) break;
+            if (!candidate) {
+              for (let lookAhead = index + 1; lookAhead < Math.min(lines.length, index + 4); lookAhead += 1) {
+                if (lineContainsAnyLabel(lines[lookAhead], mode)) break;
+                candidate = extendCandidateAcrossLines(lines, lookAhead, lines[lookAhead], mode, type);
+                if (candidate) break;
+              }
             }
+
+            if (candidate) occurrences.push({ value: candidate, lineIndex: index, charIndex: match.index });
+            if (match.index === lineRegex.lastIndex) lineRegex.lastIndex += 1;
           }
-
-          if (candidate) values.push(candidate);
         }
 
-        const globalLabelRegex = labelFactory(mode, 'gi');
-        const flatText = normalizedText.replace(/\n+/g, ' ');
-        let globalMatch;
-        while ((globalMatch = globalLabelRegex.exec(flatText)) !== null) {
-          labelFound = true;
-          const start = globalMatch.index + globalMatch[0].length;
-          const remainder = flatText.slice(start, start + 110);
-          const candidate = firstCandidate(remainder, type);
-          if (candidate) values.push(candidate);
-          if (globalMatch.index === globalLabelRegex.lastIndex) globalLabelRegex.lastIndex += 1;
+        if (!occurrences.length) {
+          const flatText = normalizedText.replace(/\n+/g, ' ');
+          const globalRegex = labelFactory(mode, 'gi');
+          let globalMatch;
+          while ((globalMatch = globalRegex.exec(flatText)) !== null) {
+            labelFound = true;
+            const remainder = flatText.slice(globalMatch.index + globalMatch[0].length, globalMatch.index + globalMatch[0].length + 180);
+            const candidate = firstCandidate(remainder, type);
+            if (candidate) occurrences.push({ value: candidate, lineIndex: -1, charIndex: globalMatch.index });
+            if (globalMatch.index === globalRegex.lastIndex) globalRegex.lastIndex += 1;
+          }
         }
 
-        return { values: [...new Set(values)], labelFound };
+        const uniqueOccurrences = dedupeOccurrences(occurrences, type);
+        return { values: uniqueOccurrences.map(item => item.value), occurrences: uniqueOccurrences, labelFound };
       }
 
-      // Extract both identifiers from the same OCR result so serials can be attached to their part.
       function extractIdentifiers(text, mode = 'flexible') {
         const normalizedText = normalizeOcrText(text);
         const parts = extractValuesForLabel(normalizedText, mode, 'part');
         const serials = extractValuesForLabel(normalizedText, mode, 'serial');
-
         return {
           partNumbers: parts.values,
           serialNumbers: serials.values,
+          partOccurrences: parts.occurrences,
+          serialOccurrences: serials.occurrences,
           partLabelFound: parts.labelFound,
           serialLabelFound: serials.labelFound,
           normalizedText
         };
       }
 
-      // Compatibility helpers are exposed for browser-console extraction tests.
+      function extractionScore(extracted, confidence, type) {
+        const values = type === 'serial' ? extracted.serialNumbers : extracted.partNumbers;
+        const labelFound = type === 'serial' ? extracted.serialLabelFound : extracted.partLabelFound;
+        const totalCharacters = values.reduce((sum, value) => sum + value.length, 0);
+        return (values.length ? 300 : 0)
+          + values.length * 35
+          + totalCharacters * (type === 'serial' ? 2 : 1)
+          + (labelFound ? 25 : 0)
+          + Math.max(0, Number(confidence) || 0) * 0.15;
+      }
+
+      // Choose the strongest OCR pass separately for parts and serials, then combine both fields.
+      function chooseBestRecognition(recognitions) {
+        const bestPart = [...recognitions].sort((a, b) => extractionScore(b.extracted, b.confidence, 'part') - extractionScore(a.extracted, a.confidence, 'part'))[0];
+        const bestSerial = [...recognitions].sort((a, b) => extractionScore(b.extracted, b.confidence, 'serial') - extractionScore(a.extracted, a.confidence, 'serial'))[0];
+        const rawText = recognitions.map(item => `[${item.passName}]\n${item.extracted.normalizedText}`).join('\n\n');
+        return {
+          partNumbers: bestPart?.extracted.partNumbers || [],
+          serialNumbers: bestSerial?.extracted.serialNumbers || [],
+          partOccurrences: bestPart?.extracted.partOccurrences || [],
+          serialOccurrences: bestSerial?.extracted.serialOccurrences || [],
+          partLabelFound: recognitions.some(item => item.extracted.partLabelFound),
+          serialLabelFound: recognitions.some(item => item.extracted.serialLabelFound),
+          normalizedText: rawText.slice(0, MAX_STORED_OCR_CHARS),
+          confidence: Math.round(Math.max(...recognitions.map(item => Number(item.confidence) || 0))),
+          method: `OCR (${[...new Set([bestPart?.passName, bestSerial?.passName].filter(Boolean))].join(' + ')})`
+        };
+      }
+
       function extractPartNumbers(text, mode = 'flexible') {
         const result = extractIdentifiers(text, mode);
         return { values: result.partNumbers, labelFound: result.partLabelFound, normalizedText: result.normalizedText };
@@ -1735,7 +1837,7 @@
         if (!cleanedPart) return { added: false, reason: 'invalid' };
 
         const timestamp = new Date().toISOString();
-        let part = state.results.find(result => result.partNumber.toUpperCase() === cleanedPart.toUpperCase());
+        let part = state.results.find(result => partCanonicalKey(result.partNumber) === partCanonicalKey(cleanedPart));
         const created = !part;
 
         if (!part) {
@@ -1786,10 +1888,74 @@
         return { added: true, created, incremented: !created, serialsAdded, serialsUpdated, part };
       }
 
-      function serialsForPart(partIndex, partCount, serialNumbers) {
-        if (partCount === 1) return serialNumbers;
-        if (serialNumbers.length === partCount && serialNumbers[partIndex]) return [serialNumbers[partIndex]];
-        return serialNumbers[partIndex] ? [serialNumbers[partIndex]] : [];
+      // Attach each serial to the nearest part label when a photo contains multiple records.
+      function serialGroupsForParts(extracted) {
+        const groups = extracted.partNumbers.map(() => []);
+        if (!groups.length || !extracted.serialNumbers.length) return groups;
+        if (groups.length === 1) {
+          groups[0] = [...extracted.serialNumbers];
+          return groups;
+        }
+
+        if (extracted.partOccurrences.length && extracted.serialOccurrences.length) {
+          for (const serial of extracted.serialOccurrences) {
+            let bestIndex = 0;
+            let bestScore = Number.POSITIVE_INFINITY;
+            extracted.partOccurrences.forEach((part, index) => {
+              const lineDistance = part.lineIndex < 0 || serial.lineIndex < 0 ? 50 : Math.abs(serial.lineIndex - part.lineIndex);
+              const precedingBonus = part.lineIndex >= 0 && serial.lineIndex >= part.lineIndex ? -2 : 0;
+              const characterDistance = Math.abs((serial.charIndex || 0) - (part.charIndex || 0)) / 200;
+              const score = lineDistance * 10 + characterDistance + precedingBonus;
+              if (score < bestScore) {
+                bestScore = score;
+                bestIndex = Math.min(index, groups.length - 1);
+              }
+            });
+            groups[bestIndex].push(serial.value);
+          }
+          return groups.map(values => [...new Map(values.map(value => [serialCanonicalKey(value), value])).values()]);
+        }
+
+        extracted.serialNumbers.forEach((serial, index) => {
+          groups[Math.min(index, groups.length - 1)].push(serial);
+        });
+        return groups;
+      }
+
+      async function recognizeImageWithFallbacks(file, worker, requestedMode, labelMode, fileIndex, totalFiles) {
+        const sparseText = window.Tesseract?.PSM?.SPARSE_TEXT ?? 11;
+        const singleBlock = window.Tesseract?.PSM?.SINGLE_BLOCK ?? 6;
+        const automatic = window.Tesseract?.PSM?.AUTO ?? 3;
+        const passes = requestedMode === 'auto'
+          ? [
+              { mode: 'auto', psm: sparseText, name: 'enhanced' },
+              { mode: 'binary', psm: singleBlock, name: 'monochrome' },
+              { mode: 'original', psm: automatic, name: 'original' }
+            ]
+          : [{ mode: requestedMode, psm: sparseText, name: requestedMode }];
+
+        const recognitions = [];
+        for (let passIndex = 0; passIndex < passes.length; passIndex += 1) {
+          const pass = passes[passIndex];
+          const baseProgress = ((fileIndex + passIndex / passes.length) / totalFiles) * 100;
+          setStatus(`Reading ${pass.name} image pass`, baseProgress);
+          await worker.setParameters({ tessedit_pageseg_mode: pass.psm, preserve_interword_spaces: '1' });
+          const canvas = await prepareCanvas(file, pass.mode);
+          const result = await worker.recognize(canvas);
+          const extracted = extractIdentifiers(result?.data?.text || '', labelMode);
+          recognitions.push({
+            passName: pass.name,
+            confidence: result?.data?.confidence ?? '',
+            extracted
+          });
+
+          // Two complementary passes are normally enough. Use the original image only when a field is still missing.
+          if (requestedMode === 'auto' && passIndex === 1) {
+            const interim = chooseBestRecognition(recognitions);
+            if (interim.partNumbers.length && interim.serialNumbers.length) break;
+          }
+        }
+        return chooseBestRecognition(recognitions);
       }
 
       // Main scan pipeline: preprocess each photo, read both identifiers, and update grouped inventory.
@@ -1815,28 +1981,31 @@
             updateQueueStatus(item.id, 'Preparing image…');
             setStatus(`Preparing photo ${index + 1} of ${totalFiles}`, index / totalFiles * 100);
 
-            const canvas = await prepareCanvas(item.file, els.imageMode.value);
-            updateQueueStatus(item.id, 'Reading text…');
-
-            const result = await worker.recognize(canvas);
-            const text = result?.data?.text || '';
-            const confidence = result?.data?.confidence ?? '';
-            const extracted = extractIdentifiers(text, els.labelMode.value);
+            updateQueueStatus(item.id, 'Reading and comparing image passes…');
+            const extracted = await recognizeImageWithFallbacks(
+              item.file,
+              worker,
+              els.imageMode.value,
+              els.labelMode.value,
+              index,
+              totalFiles
+            );
 
             if (extracted.partNumbers.length) {
               let fileParts = 0;
               let fileSerials = 0;
+              const serialGroups = serialGroupsForParts(extracted);
 
               for (let partIndex = 0; partIndex < extracted.partNumbers.length; partIndex += 1) {
                 const partNumber = extracted.partNumbers[partIndex];
-                const attachedSerials = serialsForPart(partIndex, extracted.partNumbers.length, extracted.serialNumbers);
+                const attachedSerials = serialGroups[partIndex] || [];
                 const outcome = addOrIncrementPart({
                   partNumber,
                   serialNumbers: attachedSerials,
                   source: item.file.name || `Camera photo ${index + 1}`,
-                  confidence,
+                  confidence: extracted.confidence,
                   rawText: extracted.normalizedText,
-                  method: 'OCR'
+                  method: extracted.method
                 });
 
                 if (outcome.added) {
@@ -2013,7 +2182,7 @@
           return;
         }
 
-        const matchingPart = state.results.find(entry => entry.id !== id && entry.partNumber.toUpperCase() === cleaned.toUpperCase());
+        const matchingPart = state.results.find(entry => entry.id !== id && partCanonicalKey(entry.partNumber) === partCanonicalKey(cleaned));
         if (matchingPart) {
           mergePartRecords(matchingPart, result);
           state.results = state.results.filter(entry => entry.id !== id);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#242122">
-  <meta name="description" content="Password-protected shared inventory database for scanned part and serial numbers.">
+  <meta name="description" content="Public shared inventory database for scanned part and serial numbers.">
   <title>Inventory Database | Part &amp; Serial Scanner</title>
 
   <!-- SheetJS creates an Excel workbook from the cloud inventory. -->
@@ -305,7 +305,7 @@
     .account-name strong { display: block; color: var(--charcoal); }
 
     .toolbar {
-      display: none;
+      display: grid;
       margin-bottom: 18px;
       padding-bottom: 18px;
       border-bottom: 1px solid var(--grey-200);
@@ -456,7 +456,7 @@
           <span class="wordmark-main">Inventory</span>
           <span class="wordmark-accent">Database</span>
         </div>
-        <span class="wordmark-subtitle">Protected shared records</span>
+        <span class="wordmark-subtitle">Shared inventory records</span>
       </div>
       <a class="back-link" href="index.html">Return to scanner</a>
     </div>
@@ -464,9 +464,9 @@
 
   <section class="hero" aria-labelledby="page-title">
     <div class="hero-inner">
-      <p class="section-label">Authorized access</p>
-      <h1 id="page-title">View and synchronize shared inventory.</h1>
-      <p>Sign in with an account created by the site administrator. The portal can upload the active sheet saved on this device and display the shared database from any authorized device.</p>
+      <p class="section-label">Open inventory access</p>
+      <h1 id="page-title">View and synchronize inventory records.</h1>
+      <p>The portal opens without a login and can upload the active sheet saved on this device, search shared records, and export the current database.</p>
     </div>
   </section>
 
@@ -474,34 +474,19 @@
     <section class="panel" aria-labelledby="access-title">
       <div class="panel-header">
         <div>
-          <span class="panel-kicker">Account</span>
-          <h2 id="access-title">Database access</h2>
-          <p>Authentication is handled by Firebase Email/Password accounts. The website does not contain a hard-coded shared password.</p>
+          <span class="panel-kicker">Connection</span>
+          <h2 id="access-title">Public database access</h2>
+          <p>No account or password is required. Anyone with the website link can view, upload, replace, or download the shared inventory.</p>
         </div>
       </div>
       <div class="panel-body">
         <div id="setupNote" class="setup-note" hidden>
-          Firebase has not been configured. Add the project values to <code>firebase-config.js</code>, enable Email/Password Authentication, create Firestore, and publish <code>firestore.rules</code>.
+          Firebase has not been configured. Add the project values to <code>firebase-config.js</code>, create Firestore, and publish the included public <code>firestore.rules</code>.
         </div>
-
-        <form id="loginForm" class="login-grid">
-          <div class="field">
-            <label for="email">Account email</label>
-            <input id="email" type="email" autocomplete="username" required>
-          </div>
-          <div class="field">
-            <label for="password">Password</label>
-            <input id="password" type="password" autocomplete="current-password" required>
-          </div>
-          <button id="loginButton" class="btn btn-primary" type="submit">Sign in</button>
-        </form>
-
-        <div id="accountBar" class="account-bar">
-          <div class="account-name">Signed in as<strong id="accountEmail"></strong></div>
-          <button id="logoutButton" class="btn btn-secondary" type="button">Sign out</button>
+        <div class="setup-note" style="border-left-color:#b54835;background:#fff6f3;color:#6d2b20;">
+          This version intentionally has no password protection. Use it only when the inventory is suitable for public access.
         </div>
-
-        <div id="authMessage" class="message" role="status" aria-live="polite"></div>
+        <div id="connectionMessage" class="message" role="status" aria-live="polite"></div>
       </div>
     </section>
 
@@ -510,11 +495,11 @@
         <div>
           <span class="panel-kicker">Cloud records</span>
           <h2 id="inventory-title">Shared inventory</h2>
-          <p>Upload the active sheet from this browser, search the shared records, or download the current database as one Excel worksheet.</p>
+          <p>Upload the active sheet from this browser, search public records, replace the collection, or download the current database as one Excel worksheet.</p>
         </div>
       </div>
       <div class="panel-body">
-        <div id="toolbar" class="toolbar">
+        <div id="toolbar" class="toolbar show">
           <div class="field">
             <label for="searchInput">Search inventory</label>
             <input id="searchInput" type="search" placeholder="Part or serial number">
@@ -527,24 +512,16 @@
         <div id="databaseSummary" class="database-summary" hidden></div>
         <div id="databaseMessage" class="message" role="status" aria-live="polite"></div>
         <div id="inventoryList" class="inventory-list">
-          <div class="empty-state">Sign in to view the shared inventory database.</div>
+          <div class="empty-state">Connecting to the shared inventory database…</div>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="site-footer">Protected inventory data portal</footer>
+  <footer class="site-footer">Shared inventory data portal</footer>
 
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
-    import {
-      browserLocalPersistence,
-      getAuth,
-      onAuthStateChanged,
-      setPersistence,
-      signInWithEmailAndPassword,
-      signOut
-    } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
     import {
       collection,
       doc,
@@ -558,21 +535,12 @@
     } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
     import { databaseSettings, firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 
-    // The scanner and database portal share this browser-storage key on the same GitHub Pages origin.
     const LOCAL_STORAGE_KEY = 'part-serial-scanner-results-v2';
     const MAX_BATCH_OPERATIONS = 400;
 
     const els = {
       setupNote: document.getElementById('setupNote'),
-      loginForm: document.getElementById('loginForm'),
-      loginButton: document.getElementById('loginButton'),
-      email: document.getElementById('email'),
-      password: document.getElementById('password'),
-      accountBar: document.getElementById('accountBar'),
-      accountEmail: document.getElementById('accountEmail'),
-      logoutButton: document.getElementById('logoutButton'),
-      authMessage: document.getElementById('authMessage'),
-      toolbar: document.getElementById('toolbar'),
+      connectionMessage: document.getElementById('connectionMessage'),
       searchInput: document.getElementById('searchInput'),
       uploadButton: document.getElementById('uploadButton'),
       replaceButton: document.getElementById('replaceButton'),
@@ -582,14 +550,11 @@
       inventoryList: document.getElementById('inventoryList')
     };
 
-    let auth = null;
     let db = null;
-    let currentUser = null;
     let cloudInventory = [];
     let unsubscribeInventory = null;
     let busy = false;
 
-    // Escape database text before inserting it into generated HTML.
     function escapeHtml(value) {
       return String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -618,15 +583,15 @@
       }).format(date);
     }
 
-    // Produce a Firestore-safe, deterministic document ID from the part number.
+    // A normalized part number produces the same Firestore document ID on every device.
     function partDocumentId(partNumber) {
-      const bytes = new TextEncoder().encode(String(partNumber).toUpperCase());
+      const normalized = String(partNumber).toUpperCase().replace(/[^A-Z0-9]/g, '') || String(partNumber).toUpperCase();
+      const bytes = new TextEncoder().encode(normalized);
       let binary = '';
       for (const byte of bytes) binary += String.fromCharCode(byte);
       return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     }
 
-    // Validate the locally saved inventory before it is sent to Firestore.
     function readLocalInventory() {
       let parsed;
       try {
@@ -659,48 +624,40 @@
           lastSource: part.lastSource || '',
           lastConfidence: part.lastConfidence ?? '',
           lastMethod: part.lastMethod || '',
-          lastRawText: String(part.lastRawText || '').slice(0, 1200)
+          lastRawText: String(part.lastRawText || '').slice(0, 2400)
         }));
     }
 
     function setBusy(value) {
       busy = value;
-      for (const button of [els.loginButton, els.logoutButton, els.uploadButton, els.replaceButton, els.downloadButton]) {
-        button.disabled = value;
-      }
+      for (const button of [els.uploadButton, els.replaceButton, els.downloadButton]) button.disabled = value;
     }
 
-    // Write records in chunks below Firestore's batch-operation limit.
     async function uploadRecords(records) {
       for (let offset = 0; offset < records.length; offset += MAX_BATCH_OPERATIONS) {
         const batch = writeBatch(db);
         const chunk = records.slice(offset, offset + MAX_BATCH_OPERATIONS);
-
         for (const part of chunk) {
           const reference = doc(db, databaseSettings.collectionName, partDocumentId(part.partNumber));
           batch.set(reference, {
             ...part,
             updatedAt: serverTimestamp(),
-            updatedBy: currentUser.email || currentUser.uid
+            updatedBy: 'Public website'
           });
         }
-
         await batch.commit();
       }
     }
 
-    // Upsert the current browser sheet into the shared database without deleting other records.
     async function uploadActiveSheet() {
-      if (!currentUser || busy) return;
+      if (!db || busy) return;
       clearMessage(els.databaseMessage);
-
       try {
         const records = readLocalInventory();
         if (!records.length) {
           showMessage(els.databaseMessage, 'The scanner on this device does not currently contain any inventory records.', 'warn');
           return;
         }
-
         setBusy(true);
         await uploadRecords(records);
         showMessage(els.databaseMessage, `${records.length} part record${records.length === 1 ? '' : 's'} uploaded to the shared database.`, 'success');
@@ -712,29 +669,31 @@
       }
     }
 
-    // Replace mode clears the existing collection before uploading this device's complete active sheet.
     async function replaceDatabase() {
-      if (!currentUser || busy) return;
-      const records = readLocalInventory();
+      if (!db || busy) return;
+      let records;
+      try {
+        records = readLocalInventory();
+      } catch (error) {
+        showMessage(els.databaseMessage, error.message, 'error');
+        return;
+      }
       if (!records.length) {
         showMessage(els.databaseMessage, 'The local active sheet is empty, so the database was not replaced.', 'warn');
         return;
       }
-
-      if (!window.confirm(`Replace the shared database with the ${records.length} part record${records.length === 1 ? '' : 's'} saved on this device?`)) return;
+      if (!window.confirm(`Replace the shared database with the ${records.length} part record${records.length === 1 ? '' : 's'} saved on this device? This public action affects every viewer.`)) return;
 
       try {
         setBusy(true);
         clearMessage(els.databaseMessage);
         const snapshot = await getDocs(collection(db, databaseSettings.collectionName));
         const references = snapshot.docs.map(item => item.ref);
-
         for (let offset = 0; offset < references.length; offset += MAX_BATCH_OPERATIONS) {
           const batch = writeBatch(db);
           for (const reference of references.slice(offset, offset + MAX_BATCH_OPERATIONS)) batch.delete(reference);
           await batch.commit();
         }
-
         await uploadRecords(records);
         showMessage(els.databaseMessage, 'The shared database was replaced with this device’s active sheet.', 'success');
       } catch (error) {
@@ -748,20 +707,16 @@
     function filteredInventory() {
       const search = els.searchInput.value.trim().toUpperCase();
       if (!search) return cloudInventory;
-      return cloudInventory.filter(part =>
-        part.partNumber.includes(search) ||
-        part.serials.some(serial => serial.serialNumber.includes(search))
-      );
+      const compactSearch = search.replace(/[^A-Z0-9]/g, '');
+      return cloudInventory.filter(part => {
+        const partMatch = part.partNumber.includes(search) || part.partNumber.replace(/[^A-Z0-9]/g, '').includes(compactSearch);
+        return partMatch || part.serials.some(serial =>
+          serial.serialNumber.includes(search) || serial.serialNumber.replace(/[^A-Z0-9]/g, '').includes(compactSearch)
+        );
+      });
     }
 
-    // Render the cloud collection as grouped parent part records and serial subgroups.
     function renderInventory() {
-      if (!currentUser) {
-        els.databaseSummary.hidden = true;
-        els.inventoryList.innerHTML = '<div class="empty-state">Sign in to view the shared inventory database.</div>';
-        return;
-      }
-
       const displayed = filteredInventory();
       const totalQuantity = cloudInventory.reduce((sum, part) => sum + part.quantity, 0);
       const serialCount = cloudInventory.reduce((sum, part) => sum + part.serials.length, 0);
@@ -784,7 +739,6 @@
               <h3 class="part-number">${escapeHtml(part.partNumber)}</h3>
               <div class="metadata">
                 <span>Updated ${escapeHtml(formatDate(part.updatedAt || part.lastSeen))}</span>
-                ${part.updatedBy ? `<span>By ${escapeHtml(part.updatedBy)}</span>` : ''}
                 ${part.lastSource ? `<span>Source: ${escapeHtml(part.lastSource)}</span>` : ''}
               </div>
             </div>
@@ -811,29 +765,17 @@
       const rows = [];
       for (const part of cloudInventory) {
         rows.push({
-          'Record Type': 'Part',
-          'Part Number': part.partNumber,
-          'Quantity': part.quantity,
-          'Serial Number': '',
-          'Serial Scan Count': '',
-          'First Scanned': part.firstSeen,
-          'Last Scanned': part.lastSeen,
-          'Source Image': part.lastSource,
-          'Method': part.lastMethod,
-          'OCR Confidence (%)': part.lastConfidence
+          'Record Type': 'Part', 'Part Number': part.partNumber, 'Quantity': part.quantity,
+          'Serial Number': '', 'Serial Scan Count': '', 'First Scanned': part.firstSeen,
+          'Last Scanned': part.lastSeen, 'Source Image': part.lastSource,
+          'Method': part.lastMethod, 'OCR Confidence (%)': part.lastConfidence
         });
-
         for (const serial of part.serials) {
           rows.push({
-            'Record Type': 'Serial',
-            'Part Number': part.partNumber,
-            'Quantity': '',
-            'Serial Number': serial.serialNumber,
-            'Serial Scan Count': serial.quantity,
-            'First Scanned': serial.firstSeen,
-            'Last Scanned': serial.lastSeen,
-            'Source Image': serial.lastSource,
-            'Method': serial.lastMethod,
+            'Record Type': 'Serial', 'Part Number': part.partNumber, 'Quantity': '',
+            'Serial Number': serial.serialNumber, 'Serial Scan Count': serial.quantity,
+            'First Scanned': serial.firstSeen, 'Last Scanned': serial.lastSeen,
+            'Source Image': serial.lastSource, 'Method': serial.lastMethod,
             'OCR Confidence (%)': serial.lastConfidence
           });
         }
@@ -850,13 +792,11 @@
         showMessage(els.databaseMessage, 'The Excel library did not load. Reload while connected to the internet.', 'error');
         return;
       }
-
-      const rows = buildExportRows();
       const workbook = XLSX.utils.book_new();
-      const sheet = XLSX.utils.json_to_sheet(rows);
+      const sheet = XLSX.utils.json_to_sheet(buildExportRows());
       sheet['!cols'] = [
-        { wch: 13 }, { wch: 27 }, { wch: 11 }, { wch: 35 }, { wch: 18 },
-        { wch: 25 }, { wch: 25 }, { wch: 30 }, { wch: 12 }, { wch: 20 }
+        { wch: 13 }, { wch: 27 }, { wch: 11 }, { wch: 42 }, { wch: 18 },
+        { wch: 25 }, { wch: 25 }, { wch: 30 }, { wch: 22 }, { wch: 20 }
       ];
       sheet['!autofilter'] = { ref: sheet['!ref'] };
       sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
@@ -865,7 +805,6 @@
       showMessage(els.databaseMessage, 'The shared database was downloaded as an Excel workbook.', 'success');
     }
 
-    // Subscribe to Firestore so signed-in viewers see changes without manually refreshing the page.
     function subscribeToInventory() {
       if (unsubscribeInventory) unsubscribeInventory();
       const inventoryQuery = query(collection(db, databaseSettings.collectionName), orderBy('partNumber'));
@@ -884,85 +823,40 @@
             })) : []
           };
         });
+        clearMessage(els.connectionMessage);
         renderInventory();
       }, error => {
         console.error(error);
-        showMessage(els.databaseMessage, 'The shared inventory could not be read. Check Firebase configuration and Firestore rules.', 'error');
+        showMessage(els.connectionMessage, 'The shared inventory could not be read. Check Firebase configuration and publish the included public Firestore rules.', 'error');
       });
     }
 
-    async function handleLogin(event) {
-      event.preventDefault();
-      if (!auth || busy) return;
-      clearMessage(els.authMessage);
-      setBusy(true);
-      try {
-        await signInWithEmailAndPassword(auth, els.email.value.trim(), els.password.value);
-        els.password.value = '';
-      } catch (error) {
-        console.error(error);
-        showMessage(els.authMessage, 'Sign-in failed. Check the email address and password.', 'error');
-      } finally {
-        setBusy(false);
-      }
-    }
-
-    async function handleLogout() {
-      if (!auth || busy) return;
-      setBusy(true);
-      try {
-        await signOut(auth);
-      } finally {
-        setBusy(false);
-      }
-    }
-
-    function updateAuthInterface(user) {
-      currentUser = user;
-      const signedIn = Boolean(user);
-      els.loginForm.hidden = signedIn;
-      els.accountBar.classList.toggle('show', signedIn);
-      els.toolbar.classList.toggle('show', signedIn);
-      els.accountEmail.textContent = user?.email || '';
-      els.email.value = signedIn ? '' : els.email.value;
-
-      if (signedIn) {
-        clearMessage(els.authMessage);
-        subscribeToInventory();
-      } else {
-        if (unsubscribeInventory) unsubscribeInventory();
-        unsubscribeInventory = null;
-        cloudInventory = [];
-        renderInventory();
-      }
-    }
-
-    // Configure Firebase only after the administrator has replaced the placeholder values.
-    async function initializeDatabasePortal() {
+    function initializeDatabasePortal() {
       if (!isFirebaseConfigured()) {
         els.setupNote.hidden = false;
-        els.loginForm.hidden = true;
+        els.inventoryList.innerHTML = '<div class="empty-state">Firebase configuration is required before the shared database can open.</div>';
+        els.uploadButton.disabled = true;
+        els.replaceButton.disabled = true;
+        els.downloadButton.disabled = true;
         return;
       }
-
       const app = initializeApp(firebaseConfig);
-      auth = getAuth(app);
       db = getFirestore(app);
-      await setPersistence(auth, browserLocalPersistence);
-      onAuthStateChanged(auth, updateAuthInterface);
+      showMessage(els.connectionMessage, 'Connected to the public inventory database.', 'success');
+      subscribeToInventory();
     }
 
-    els.loginForm.addEventListener('submit', handleLogin);
-    els.logoutButton.addEventListener('click', handleLogout);
     els.uploadButton.addEventListener('click', uploadActiveSheet);
     els.replaceButton.addEventListener('click', replaceDatabase);
     els.downloadButton.addEventListener('click', downloadDatabaseExcel);
     els.searchInput.addEventListener('input', renderInventory);
 
-    initializeDatabasePortal().catch(error => {
+    try {
+      initializeDatabasePortal();
+    } catch (error) {
       console.error(error);
-      showMessage(els.authMessage, 'Firebase could not be initialized. Review firebase-config.js.', 'error');
-    });
+      showMessage(els.connectionMessage, 'Firebase could not be initialized. Review firebase-config.js.', 'error');
+    }
   </script>
 </body>
 </html>

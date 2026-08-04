@@ -4,10 +4,17 @@
  * Replace the placeholder values below with the configuration copied from:
  * Firebase Console > Project settings > Your apps > Web app.
  *
- * Firebase web configuration values identify the project; access is protected
- * by Firebase Authentication and the Firestore security rules in this project.
+ * Firebase web configuration values identify the project. This public version
+ * relies on the included Firestore rules and does not use Firebase Authentication.
  */
-
+export const firebaseConfig = {
+  apiKey: 'REPLACE_WITH_FIREBASE_API_KEY',
+  authDomain: 'REPLACE_WITH_PROJECT_ID.firebaseapp.com',
+  projectId: 'REPLACE_WITH_PROJECT_ID',
+  storageBucket: 'REPLACE_WITH_PROJECT_ID.firebasestorage.app',
+  messagingSenderId: 'REPLACE_WITH_MESSAGING_SENDER_ID',
+  appId: 'REPLACE_WITH_FIREBASE_APP_ID'
+};
 
 /* Database collection settings used by database.html. */
 export const databaseSettings = {
