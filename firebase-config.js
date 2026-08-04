@@ -8,12 +8,12 @@
  * by Firebase Authentication and the Firestore security rules in this project.
  */
 export const firebaseConfig = {
-  apiKey: 'REPLACE_WITH_FIREBASE_API_KEY',
-  authDomain: 'REPLACE_WITH_PROJECT_ID.firebaseapp.com',
-  projectId: 'REPLACE_WITH_PROJECT_ID',
-  storageBucket: 'REPLACE_WITH_PROJECT_ID.firebasestorage.app',
-  messagingSenderId: 'REPLACE_WITH_MESSAGING_SENDER_ID',
-  appId: 'REPLACE_WITH_FIREBASE_APP_ID'
+  apiKey: 'AIzaSyDqsZrtUQXhy7WkOt8gQa6I51BJaltCVWI',
+  authDomain: 'scannerdatabasegage.firebaseapp.com',
+  projectId: 'scannerdatabasegage',
+  storageBucket: 'scannerdatabasegage.firebasestorage.app',
+  messagingSenderId: '1017600933078',
+  appId: '1:1017600933078:web:aa2abe62e28f7b60049d77'
 };
 
 /* Database collection settings used by database.html. */
