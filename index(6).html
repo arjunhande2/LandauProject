@@ -1,0 +1,2198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#242122">
+  <meta name="description" content="Scan part and serial numbers from product labels, group matching parts, and export the inventory to Excel.">
+  <title>Part &amp; Serial Scanner | Data Capture</title>
+
+  <!-- OCR and Excel libraries. Both run in the browser; no backend is required. -->
+  <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Open+Sans:wght@400;500;600;700&display=swap');
+
+    /* Central design tokens keep colours, shadows, and fonts consistent. */
+    :root {
+      --charcoal: #242122;
+      --charcoal-soft: #333132;
+      --gold: #fdb515;
+      --gold-dark: #d99600;
+      --grey-900: #2d2d2d;
+      --grey-700: #5f6262;
+      --grey-500: #8b8d8d;
+      --grey-300: #d5d6d6;
+      --grey-200: #e6e7e7;
+      --grey-100: #f4f4f3;
+      --white: #ffffff;
+      --success: #2f6b47;
+      --danger: #a33535;
+      --warning: #876000;
+      --shadow: 0 12px 34px rgba(25, 24, 24, 0.08);
+      --font-display: "Montserrat", "Avenir Next", Arial, sans-serif;
+      --font-body: "Open Sans", Arial, sans-serif;
+    }
+
+    /* Base reset and accessibility behaviour shared by the whole page. */
+    * { box-sizing: border-box; }
+
+    html {
+      min-width: 320px;
+      color-scheme: light;
+      background: var(--grey-100);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--grey-900);
+      background: var(--grey-100);
+      font-family: var(--font-body);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button,
+    input,
+    select,
+    textarea { font: inherit; }
+
+    button,
+    label[for] { -webkit-tap-highlight-color: transparent; }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    summary:focus-visible,
+    label.btn:focus-within {
+      outline: 3px solid rgba(253, 181, 21, 0.3);
+      outline-offset: 2px;
+    }
+
+    /* Branded page header and wordmark. */
+    .top-strip {
+      min-height: 8px;
+      background: var(--gold);
+    }
+
+    .site-header {
+      background: var(--white);
+      border-bottom: 1px solid var(--grey-200);
+    }
+
+    .header-inner {
+      width: min(1180px, calc(100% - 32px));
+      min-height: 92px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .wordmark {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      color: var(--charcoal);
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .wordmark-main {
+      font-size: clamp(1.15rem, 3vw, 1.75rem);
+      font-weight: 300;
+      letter-spacing: 0.1em;
+    }
+
+    .wordmark-accent {
+      color: var(--gold-dark);
+      font-size: clamp(1.15rem, 3vw, 1.75rem);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    .wordmark-subtitle {
+      display: block;
+      margin-top: 4px;
+      padding-top: 5px;
+      border-top: 2px solid var(--gold);
+      color: var(--grey-700);
+      font-family: var(--font-display);
+      font-size: 0.62rem;
+      font-weight: 500;
+      letter-spacing: 0.17em;
+      text-transform: uppercase;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--grey-700);
+      font-family: var(--font-display);
+      font-size: 0.69rem;
+      font-weight: 600;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    /* Introductory banner that explains the scanner's purpose. */
+    .hero {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(36, 33, 34, 0.98), rgba(36, 33, 34, 0.91)),
+        linear-gradient(135deg, #242122, #464445);
+      color: var(--white);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0 0 0 auto;
+      width: min(42vw, 560px);
+      opacity: 0.12;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.25) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.25) 1px, transparent 1px);
+      background-size: 34px 34px;
+      transform: skewX(-11deg) translateX(10%);
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 56px 0 62px;
+    }
+
+    .section-label {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 16px;
+      color: var(--gold);
+      font-family: var(--font-display);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+
+    .section-label::before {
+      content: "";
+      width: 36px;
+      height: 2px;
+      background: currentColor;
+    }
+
+    h1,
+    h2,
+    h3 {
+      font-family: var(--font-display);
+      color: inherit;
+    }
+
+    h1 {
+      max-width: 830px;
+      margin: 0;
+      font-size: clamp(2.25rem, 7vw, 4.8rem);
+      font-weight: 300;
+      line-height: 1.02;
+      letter-spacing: -0.035em;
+    }
+
+    .hero-copy {
+      max-width: 730px;
+      margin: 20px 0 0;
+      color: #d5d4d4;
+      font-size: clamp(0.95rem, 2vw, 1.08rem);
+      line-height: 1.75;
+    }
+
+    /* Main two-panel application layout. */
+    .app {
+      width: min(1180px, calc(100% - 32px));
+      margin: -28px auto 0;
+      padding-bottom: max(48px, env(safe-area-inset-bottom));
+      position: relative;
+      z-index: 2;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 24px;
+    }
+
+    .panel {
+      overflow: hidden;
+      background: var(--white);
+      border: 1px solid var(--grey-200);
+      border-top: 4px solid var(--gold);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 27px 28px 22px;
+      border-bottom: 1px solid var(--grey-200);
+    }
+
+    .panel-kicker {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--gold-dark);
+      font-family: var(--font-display);
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      color: var(--charcoal);
+      font-size: 1.28rem;
+      font-weight: 500;
+      letter-spacing: -0.015em;
+    }
+
+    .panel-header p {
+      max-width: 580px;
+      margin: 8px 0 0;
+      color: var(--grey-700);
+      font-size: 0.89rem;
+      line-height: 1.58;
+    }
+
+    .panel-body { padding: 28px; }
+
+    .scan-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    /* Shared button system used for capture, scanning, editing, and export. */
+    .btn {
+      min-height: 50px;
+      border: 1px solid transparent;
+      border-radius: 0;
+      padding: 13px 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--charcoal);
+      background: var(--white);
+      font-family: var(--font-display);
+      font-size: 0.77rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      line-height: 1.2;
+      text-align: center;
+      text-decoration: none;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+
+    .btn:hover:not(:disabled) { transform: translateY(-1px); }
+    .btn:active:not(:disabled) { transform: translateY(0); }
+    .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+
+    .btn svg {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .btn-primary,
+    .btn-success {
+      color: var(--charcoal);
+      background: var(--gold);
+      border-color: var(--gold);
+    }
+
+    .btn-primary:hover:not(:disabled),
+    .btn-success:hover:not(:disabled) {
+      background: #ffbf2f;
+      border-color: #ffbf2f;
+    }
+
+    .btn-secondary {
+      color: var(--charcoal);
+      background: var(--white);
+      border-color: #bfc1c1;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      border-color: var(--charcoal);
+      background: var(--grey-100);
+    }
+
+    .btn-danger {
+      color: var(--danger);
+      background: transparent;
+      border-color: rgba(163, 53, 53, 0.35);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      color: var(--white);
+      background: var(--danger);
+      border-color: var(--danger);
+    }
+
+    .btn-small {
+      min-height: 38px;
+      padding: 8px 12px;
+      font-size: 0.68rem;
+    }
+
+    .hidden-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* OCR settings, form fields, and automatic grouping notice. */
+    .settings {
+      display: grid;
+      gap: 16px;
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--grey-200);
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--charcoal-soft);
+      font-family: var(--font-display);
+      font-size: 0.69rem;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .field select,
+    .field input[type="text"],
+    .manual-row input,
+    .part-input,
+    .serial-input,
+    .quantity-input {
+      width: 100%;
+      min-height: 47px;
+      padding: 11px 13px;
+      color: var(--charcoal);
+      background: var(--white);
+      border: 1px solid #bfc1c1;
+      border-radius: 0;
+      outline: none;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    .field select:focus,
+    .field input[type="text"]:focus,
+    .manual-row input:focus,
+    .part-input:focus,
+    .serial-input:focus,
+    .quantity-input:focus {
+      border-color: var(--gold-dark);
+      box-shadow: 0 0 0 3px rgba(253, 181, 21, 0.15);
+    }
+
+    .grouping-note {
+      margin-top: 16px;
+      padding: 15px 16px;
+      display: grid;
+      gap: 4px;
+      color: var(--charcoal-soft);
+      background: var(--grey-100);
+      border-left: 3px solid var(--gold);
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+
+    .grouping-note strong {
+      font-family: var(--font-display);
+      font-size: 0.69rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .grouping-note span { color: var(--grey-700); }
+
+    /* Preview list for photos waiting to be processed. */
+    .queue {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .queue-card {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 11px;
+      background: var(--white);
+      border: 1px solid var(--grey-200);
+      border-left: 3px solid var(--gold);
+    }
+
+    .queue-card img {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      background: var(--grey-200);
+      border-radius: 0;
+    }
+
+    .queue-name {
+      overflow: hidden;
+      color: var(--charcoal);
+      font-family: var(--font-display);
+      font-size: 0.83rem;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .queue-status {
+      margin-top: 5px;
+      color: var(--grey-700);
+      font-size: 0.77rem;
+    }
+
+    #scanButton {
+      width: 100%;
+      margin-top: 18px !important;
+    }
+
+    /* OCR progress and user feedback messages. */
+    .status-box {
+      display: none;
+      margin-top: 16px;
+      padding: 16px;
+      background: var(--grey-100);
+      border: 1px solid var(--grey-200);
+    }
+
+    .status-box.show { display: block; }
+
+    .status-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--charcoal-soft);
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .progress {
+      height: 5px;
+      overflow: hidden;
+      background: var(--grey-300);
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      background: var(--gold);
+      transition: width 0.2s ease;
+    }
+
+    .message {
+      display: none;
+      margin-top: 16px;
+      padding: 13px 15px;
+      border-left: 3px solid currentColor;
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .message.show { display: block; }
+    .message.info { color: #31536b; background: #eef4f7; }
+    .message.success { color: var(--success); background: #edf4ef; }
+    .message.warn { color: var(--warning); background: #fff7df; }
+    .message.error { color: var(--danger); background: #f9eeee; }
+
+    .manual-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--grey-200);
+    }
+
+    .manual-row input {
+      min-width: 0;
+      text-transform: uppercase;
+    }
+
+    .privacy-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      margin-top: 18px;
+      padding: 14px 15px;
+      color: var(--grey-700);
+      background: var(--grey-100);
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+
+    .privacy-icon {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      color: var(--charcoal);
+      background: var(--gold);
+      font-family: var(--font-display);
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    /* Active-sheet records, editable results, and export controls. */
+    .results-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .count-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 8px 12px;
+      color: var(--charcoal-soft);
+      background: var(--grey-100);
+      border-left: 3px solid var(--gold);
+      font-family: var(--font-display);
+      font-size: 0.69rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .results-list {
+      display: grid;
+      gap: 11px;
+    }
+
+    .result-card {
+      display: grid;
+      gap: 11px;
+      padding: 15px;
+      background: var(--white);
+      border: 1px solid var(--grey-200);
+      border-left: 3px solid var(--gold);
+    }
+
+    .result-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 96px auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .part-input {
+      min-height: 42px;
+      color: var(--charcoal);
+      background: #fffdf7;
+      border-color: #ddc989;
+      font-family: var(--font-display);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .result-field {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .result-field label {
+      color: var(--grey-700);
+      font-family: var(--font-display);
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .quantity-input {
+      min-height: 42px;
+      text-align: center;
+      font-family: var(--font-display);
+      font-weight: 700;
+    }
+
+    .serial-group {
+      display: grid;
+      gap: 9px;
+      padding-top: 12px;
+      border-top: 1px solid var(--grey-200);
+    }
+
+    .serial-group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .serial-group-header h3 {
+      margin: 0;
+      color: var(--charcoal-soft);
+      font-size: 0.69rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .serial-group-header span {
+      color: var(--grey-700);
+      font-size: 0.68rem;
+    }
+
+    .serial-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .serial-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 8px;
+      padding: 10px;
+      background: var(--grey-100);
+      border-left: 2px solid var(--grey-300);
+    }
+
+    .serial-input {
+      min-height: 39px;
+      padding: 9px 11px;
+      font-family: var(--font-display);
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .serial-count {
+      min-width: 62px;
+      color: var(--charcoal-soft);
+      font-family: var(--font-display);
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .serial-meta {
+      grid-column: 1 / -1;
+      color: var(--grey-700);
+      font-size: 0.68rem;
+      line-height: 1.45;
+    }
+
+    .no-serials {
+      padding: 11px 12px;
+      color: var(--grey-700);
+      background: var(--grey-100);
+      font-size: 0.74rem;
+    }
+
+
+    .result-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      color: var(--grey-700);
+      font-size: 0.72rem;
+      line-height: 1.45;
+    }
+
+    details {
+      padding-top: 9px;
+      border-top: 1px solid var(--grey-200);
+    }
+
+    summary {
+      color: var(--grey-700);
+      font-family: var(--font-display);
+      font-size: 0.69rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .ocr-text {
+      max-height: 180px;
+      margin: 10px 0 0;
+      padding: 12px;
+      overflow: auto;
+      color: var(--grey-700);
+      background: var(--grey-100);
+      font: 0.74rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .empty-state {
+      padding: 42px 20px;
+      color: var(--grey-700);
+      background: var(--grey-100);
+      border: 1px dashed #bfc1c1;
+      text-align: center;
+      line-height: 1.65;
+    }
+
+    .export-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--grey-200);
+    }
+
+    .site-footer {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 0 0 32px;
+      color: var(--grey-500);
+      font-family: var(--font-display);
+      font-size: 0.64rem;
+      letter-spacing: 0.1em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    /* Responsive adjustments for tablets and desktop screens. */
+    @media (min-width: 650px) {
+      .header-inner,
+      .hero-inner,
+      .app,
+      .site-footer { width: min(1180px, calc(100% - 48px)); }
+
+      .scan-actions { grid-template-columns: 1fr 1fr; }
+      .settings { grid-template-columns: 1fr 1fr; }
+      .manual-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px; }
+      .export-grid { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
+    }
+
+    @media (min-width: 930px) {
+      .grid {
+        grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
+        align-items: start;
+      }
+
+      .results-panel {
+        position: sticky;
+        top: 18px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .header-inner { min-height: 80px; }
+      .header-status { display: none; }
+      .hero-inner { padding: 44px 0 51px; }
+      .app { margin-top: -20px; }
+      .panel-header { padding: 23px 20px 19px; }
+      .panel-body { padding: 20px; }
+      .wordmark-subtitle { font-size: 0.55rem; }
+      .queue-card { grid-template-columns: 54px minmax(0, 1fr) auto; }
+      .queue-card img { width: 54px; height: 54px; }
+      .result-top { grid-template-columns: minmax(0, 1fr) 84px; }
+      .result-top .delete-result { grid-column: 1 / -1; justify-self: end; }
+      .serial-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .serial-row .delete-serial { grid-column: 2; }
+      .serial-count { grid-column: 2; grid-row: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Brand accent and top navigation area. -->
+  <div class="top-strip" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <div aria-label="Part and Serial Number Scanner">
+        <div class="wordmark">
+          <span class="wordmark-main">Part &amp; Serial</span>
+          <span class="wordmark-accent">Scanner</span>
+        </div>
+        <span class="wordmark-subtitle">Data capture and export</span>
+      </div>
+
+      <div class="header-status">
+        <span class="status-indicator" aria-hidden="true"></span>
+        Local processing
+      </div>
+    </div>
+  </header>
+
+  <!-- Introductory content shown above the scanner. -->
+  <section class="hero" aria-labelledby="page-title">
+    <div class="hero-inner">
+      <p class="section-label">Inspection data collection</p>
+      <h1 id="page-title">Capture part and serial numbers accurately.</h1>
+      <p class="hero-copy">Photograph product labels, identify part and serial numbers, and maintain a grouped Excel-ready inventory across every scan.</p>
+    </div>
+  </section>
+
+  <!-- Main application: image capture on the left and the active sheet on the right. -->
+  <main class="app">
+    <div class="grid">
+      <!-- Capture panel: accepts photos, configures OCR, and starts processing. -->
+      <section class="panel" aria-labelledby="scan-title">
+        <div class="panel-header">
+          <div>
+            <span class="panel-kicker">Capture</span>
+            <h2 id="scan-title">Scan label images</h2>
+            <p>Take a new photo or select one or more images from the device.</p>
+          </div>
+        </div>
+
+        <div class="panel-body">
+          <div class="scan-actions">
+            <label class="btn btn-primary" for="cameraInput">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h3l1.5-2h7L17 7.5h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg>
+              Take photo
+            </label>
+            <label class="btn btn-secondary" for="galleryInput">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15"></rect><circle cx="9" cy="9" r="1.5"></circle><path d="m5.5 17 4.5-4.5 3 3 2.5-2.5 3 4"></path></svg>
+              Select images
+            </label>
+          </div>
+
+          <!-- Hidden file inputs are activated by the styled labels above. -->
+          <input class="hidden-input" id="cameraInput" type="file" accept="image/*" capture="environment">
+          <input class="hidden-input" id="galleryInput" type="file" accept="image/*" multiple>
+
+          <div class="settings">
+            <div class="field">
+              <label for="imageMode">Image processing</label>
+              <select id="imageMode">
+                <option value="auto">Automatic contrast</option>
+                <option value="original">Original image</option>
+                <option value="binary">High-contrast monochrome</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="labelMode">Label recognition</label>
+              <select id="labelMode">
+                <option value="flexible">Part and serial label variants</option>
+                <option value="strict">Part No. and Serial No. only</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grouping-note">
+            <strong>Automatic grouping</strong>
+            <span>Matching part numbers increase the quantity. Serial numbers remain listed beneath the related part.</span>
+          </div>
+
+          <!-- Selected images appear here before OCR runs. -->
+          <div id="queue" class="queue" aria-live="polite"></div>
+
+          <button id="scanButton" class="btn btn-success" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"></path><path d="M8 12h8M12 8v8"></path></svg>
+            Process selected images
+          </button>
+
+          <!-- Live OCR status, progress, and completion messages. -->
+          <div id="statusBox" class="status-box" aria-live="polite">
+            <div class="status-line">
+              <span id="statusText">Preparing OCR…</span>
+              <span id="statusPercent">0%</span>
+            </div>
+            <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+          </div>
+
+          <div id="message" class="message" role="status"></div>
+
+          <!-- Manual entry provides a fallback when OCR cannot read a label. -->
+          <div class="manual-row">
+            <input id="manualPart" type="text" autocomplete="off" placeholder="Part number" aria-label="Manual part number">
+            <input id="manualSerial" type="text" autocomplete="off" placeholder="Serial number (optional)" aria-label="Manual serial number">
+            <button id="manualAddButton" class="btn btn-secondary" type="button">Add entry</button>
+          </div>
+
+          <div class="privacy-note">
+            <div class="privacy-icon" aria-hidden="true">✓</div>
+            <div>Image recognition runs in this browser. Selected photos are not sent to a custom application server.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Active sheet: stores all scans, allows corrections, and exports the data. -->
+      <section class="panel results-panel" aria-labelledby="results-title">
+        <div class="panel-header">
+          <div>
+            <span class="panel-kicker">Records</span>
+            <h2 id="results-title">Active inventory sheet</h2>
+            <p>Matching part numbers are grouped into one record with a quantity, while serial numbers remain organized beneath each part.</p>
+          </div>
+        </div>
+
+        <div class="panel-body">
+          <div class="results-toolbar">
+            <span id="resultCount" class="count-pill">0 parts · 0 units · 0 serials</span>
+            <button id="clearButton" class="btn btn-danger btn-small" type="button" disabled>Clear sheet</button>
+          </div>
+
+          <div id="resultsList" class="results-list"></div>
+
+          <div class="export-grid">
+            <button id="exportXlsxButton" class="btn btn-success" type="button" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7.5 11 4.5 4.5 4.5-4.5"></path><path d="M4 20h16"></path></svg>
+              Download Excel workbook
+            </button>
+            <button id="exportCsvButton" class="btn btn-secondary" type="button" disabled>Export CSV</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">Part and serial number data collection</footer>
+
+  <!-- Off-screen canvas used to resize and enhance images before OCR. -->
+  <canvas id="workCanvas" hidden></canvas>
+
+
+  <script>
+    (() => {
+      'use strict';
+
+      // Configuration values control browser storage and image-processing limits.
+      const STORAGE_KEY = 'part-serial-scanner-results-v2';
+      const LEGACY_STORAGE_KEY = 'part-number-scanner-results-v1';
+      const MAX_IMAGE_DIMENSION = 2200;
+      const MAX_STORED_OCR_CHARS = 1200;
+
+      // Central application state keeps queued images, grouped inventory records, and the OCR worker.
+      const state = {
+        files: [],
+        results: loadStoredResults(),
+        worker: null,
+        busy: false
+      };
+
+      // Cache frequently used DOM elements once instead of querying them repeatedly.
+      const els = {
+        cameraInput: document.getElementById('cameraInput'),
+        galleryInput: document.getElementById('galleryInput'),
+        imageMode: document.getElementById('imageMode'),
+        labelMode: document.getElementById('labelMode'),
+        queue: document.getElementById('queue'),
+        scanButton: document.getElementById('scanButton'),
+        statusBox: document.getElementById('statusBox'),
+        statusText: document.getElementById('statusText'),
+        statusPercent: document.getElementById('statusPercent'),
+        progressBar: document.getElementById('progressBar'),
+        message: document.getElementById('message'),
+        manualPart: document.getElementById('manualPart'),
+        manualSerial: document.getElementById('manualSerial'),
+        manualAddButton: document.getElementById('manualAddButton'),
+        resultCount: document.getElementById('resultCount'),
+        resultsList: document.getElementById('resultsList'),
+        clearButton: document.getElementById('clearButton'),
+        exportXlsxButton: document.getElementById('exportXlsxButton'),
+        exportCsvButton: document.getElementById('exportCsvButton'),
+        workCanvas: document.getElementById('workCanvas')
+      };
+
+      // Generate unique IDs for queued photos, part records, and serial records.
+      function makeId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+          return window.crypto.randomUUID();
+        }
+        return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
+
+      function validIsoDate(value, fallback = new Date().toISOString()) {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+      }
+
+      function earlierDate(first, second) {
+        return new Date(first) <= new Date(second) ? first : second;
+      }
+
+      function laterDate(first, second) {
+        return new Date(first) >= new Date(second) ? first : second;
+      }
+
+      // Validate part and serial values while allowing common industrial identifier punctuation.
+      function cleanIdentifier(raw, type = 'part') {
+        const value = String(raw || '')
+          .toUpperCase()
+          .replace(/^[^A-Z0-9]+/, '')
+          .replace(/[^A-Z0-9._/\-]+$/, '')
+          .replace(/\.{2,}/g, '.')
+          .trim();
+
+        const maximumLength = type === 'serial' ? 60 : 40;
+        if (value.length < 2 || value.length > maximumLength) return '';
+        if (!/\d/.test(value)) return '';
+        if (!/^[A-Z0-9][A-Z0-9._/\-]*$/.test(value)) return '';
+        if (/^(NO|NUMBER|NUM|PART|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION)$/.test(value)) return '';
+        return value;
+      }
+
+      function cleanPartCandidate(raw) {
+        return cleanIdentifier(raw, 'part');
+      }
+
+      function cleanSerialCandidate(raw) {
+        return cleanIdentifier(raw, 'serial');
+      }
+
+      // Add or merge one serial record beneath its parent part record.
+      function addSerialToPart(part, serialNumber, metadata = {}, quantityIncrement = 1) {
+        const cleaned = cleanSerialCandidate(serialNumber);
+        if (!cleaned) return { added: false, reason: 'invalid' };
+
+        const timestamp = validIsoDate(metadata.lastSeen || metadata.timestamp);
+        const firstSeen = validIsoDate(metadata.firstSeen || metadata.timestamp || timestamp, timestamp);
+        let serial = part.serials.find(entry => entry.serialNumber.toUpperCase() === cleaned.toUpperCase());
+        const created = !serial;
+
+        if (!serial) {
+          serial = {
+            id: makeId(),
+            serialNumber: cleaned,
+            quantity: 0,
+            firstSeen,
+            lastSeen: timestamp,
+            lastSource: metadata.source || 'Unknown source',
+            lastConfidence: metadata.confidence === '' ? '' : Math.round(Number(metadata.confidence) || 0),
+            lastMethod: metadata.method || 'OCR'
+          };
+          part.serials.push(serial);
+        }
+
+        serial.quantity += Math.max(1, Math.floor(Number(quantityIncrement) || 1));
+        serial.firstSeen = earlierDate(serial.firstSeen, firstSeen);
+
+        if (new Date(timestamp) >= new Date(serial.lastSeen)) {
+          serial.lastSeen = timestamp;
+          serial.lastSource = metadata.source || serial.lastSource;
+          serial.lastConfidence = metadata.confidence === '' ? serial.lastConfidence : Math.round(Number(metadata.confidence) || 0);
+          serial.lastMethod = metadata.method || serial.lastMethod;
+        }
+
+        return { added: true, created, serial };
+      }
+
+      // Normalize both the new grouped format and records saved by earlier app versions.
+      function normalizeStoredResults(entries) {
+        const grouped = [];
+
+        for (const entry of Array.isArray(entries) ? entries : []) {
+          const partNumber = cleanPartCandidate(entry?.partNumber);
+          if (!partNumber) continue;
+
+          const entryTimestamp = validIsoDate(entry.lastSeen || entry.timestamp || entry.firstSeen);
+          const entryFirstSeen = validIsoDate(entry.firstSeen || entry.timestamp || entryTimestamp, entryTimestamp);
+          const quantity = Math.max(1, Math.floor(Number(entry.quantity) || 1));
+          let part = grouped.find(record => record.partNumber.toUpperCase() === partNumber.toUpperCase());
+
+          if (!part) {
+            part = {
+              id: entry.id || makeId(),
+              partNumber,
+              quantity: 0,
+              serials: [],
+              firstSeen: entryFirstSeen,
+              lastSeen: entryTimestamp,
+              lastSource: entry.lastSource || entry.source || 'Stored record',
+              lastConfidence: entry.lastConfidence ?? entry.confidence ?? '',
+              lastRawText: String(entry.lastRawText || entry.rawText || '').slice(0, MAX_STORED_OCR_CHARS),
+              lastMethod: entry.lastMethod || entry.method || 'Stored record'
+            };
+            grouped.push(part);
+          }
+
+          part.quantity += quantity;
+          part.firstSeen = earlierDate(part.firstSeen, entryFirstSeen);
+
+          if (new Date(entryTimestamp) >= new Date(part.lastSeen)) {
+            part.lastSeen = entryTimestamp;
+            part.lastSource = entry.lastSource || entry.source || part.lastSource;
+            part.lastConfidence = entry.lastConfidence ?? entry.confidence ?? part.lastConfidence;
+            part.lastRawText = String(entry.lastRawText || entry.rawText || part.lastRawText || '').slice(0, MAX_STORED_OCR_CHARS);
+            part.lastMethod = entry.lastMethod || entry.method || part.lastMethod;
+          }
+
+          const storedSerials = Array.isArray(entry.serials)
+            ? entry.serials
+            : entry.serialNumber
+              ? [{ serialNumber: entry.serialNumber, quantity: entry.serialQuantity || 1 }]
+              : [];
+
+          for (const serialEntry of storedSerials) {
+            addSerialToPart(part, serialEntry.serialNumber, {
+              firstSeen: serialEntry.firstSeen || serialEntry.timestamp || entryFirstSeen,
+              lastSeen: serialEntry.lastSeen || serialEntry.timestamp || entryTimestamp,
+              source: serialEntry.lastSource || serialEntry.source || entry.lastSource || entry.source,
+              confidence: serialEntry.lastConfidence ?? serialEntry.confidence ?? entry.lastConfidence ?? entry.confidence ?? '',
+              method: serialEntry.lastMethod || serialEntry.method || entry.lastMethod || entry.method || 'Stored record'
+            }, serialEntry.quantity || 1);
+          }
+        }
+
+        return grouped.sort((a, b) => new Date(a.firstSeen) - new Date(b.firstSeen));
+      }
+
+      // Load the inventory from localStorage and migrate the previous flat part-number list when needed.
+      function loadStoredResults() {
+        try {
+          const currentRaw = localStorage.getItem(STORAGE_KEY);
+          if (currentRaw) return normalizeStoredResults(JSON.parse(currentRaw));
+
+          const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+          if (!legacyRaw) return [];
+
+          const migrated = normalizeStoredResults(JSON.parse(legacyRaw));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+          return migrated;
+        } catch (error) {
+          console.warn('Could not read saved results:', error);
+          return [];
+        }
+      }
+
+      // Save the current grouped inventory after every add, edit, delete, or clear action.
+      function saveResults() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state.results));
+        } catch (error) {
+          console.warn('Could not save results:', error);
+          showMessage('Results are shown, but this browser could not save them between visits.', 'warn');
+        }
+      }
+
+      // Escape user- and OCR-generated text before inserting it into HTML.
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      // Convert stored ISO timestamps into a readable local date and time.
+      function formatDate(isoDate) {
+        try {
+          return new Intl.DateTimeFormat(undefined, {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit'
+          }).format(new Date(isoDate));
+        } catch {
+          return isoDate;
+        }
+      }
+
+      // Display status messages and manage the OCR progress indicator.
+      function showMessage(text, type = 'info') {
+        els.message.textContent = text;
+        els.message.className = `message show ${type}`;
+      }
+
+      function clearMessage() {
+        els.message.textContent = '';
+        els.message.className = 'message';
+      }
+
+      function setStatus(text, percent = 0) {
+        const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+        els.statusBox.classList.add('show');
+        els.statusText.textContent = text;
+        els.statusPercent.textContent = `${safePercent}%`;
+        els.progressBar.style.width = `${safePercent}%`;
+      }
+
+      function hideStatus() {
+        els.statusBox.classList.remove('show');
+      }
+
+      // Enable or disable controls based on queued files, saved results, and busy state.
+      function updateControls() {
+        const hasFiles = state.files.length > 0;
+        const hasResults = state.results.length > 0;
+        els.scanButton.disabled = !hasFiles || state.busy;
+        els.manualAddButton.disabled = state.busy;
+        els.clearButton.disabled = !hasResults || state.busy;
+        els.exportXlsxButton.disabled = !hasResults || state.busy;
+        els.exportCsvButton.disabled = !hasResults || state.busy;
+        els.cameraInput.disabled = state.busy;
+        els.galleryInput.disabled = state.busy;
+      }
+
+      // Add selected camera/gallery images to the processing queue.
+      function addFiles(fileList) {
+        const incoming = Array.from(fileList || []).filter(file => file.type.startsWith('image/'));
+        if (!incoming.length) {
+          showMessage('Please select an image file.', 'warn');
+          return;
+        }
+
+        clearMessage();
+        for (const file of incoming) {
+          state.files.push({
+            id: makeId(),
+            file,
+            previewUrl: URL.createObjectURL(file),
+            status: 'Ready to scan'
+          });
+        }
+        renderQueue();
+        updateControls();
+      }
+
+      // Release preview URLs and reset the queue after processing or page exit.
+      function clearQueuedFiles() {
+        for (const item of state.files) URL.revokeObjectURL(item.previewUrl);
+        state.files = [];
+        els.cameraInput.value = '';
+        els.galleryInput.value = '';
+        renderQueue();
+        updateControls();
+      }
+
+      function removeQueuedFile(id) {
+        const item = state.files.find(entry => entry.id === id);
+        if (item) URL.revokeObjectURL(item.previewUrl);
+        state.files = state.files.filter(entry => entry.id !== id);
+        renderQueue();
+        updateControls();
+      }
+
+      // Rebuild the visible queue whenever images are added, removed, or updated.
+      function renderQueue() {
+        if (!state.files.length) {
+          els.queue.innerHTML = '';
+          return;
+        }
+
+        els.queue.innerHTML = state.files.map(item => `
+          <div class="queue-card" data-queue-id="${escapeHtml(item.id)}">
+            <img src="${escapeHtml(item.previewUrl)}" alt="Selected label preview">
+            <div>
+              <div class="queue-name">${escapeHtml(item.file.name || 'Camera photo')}</div>
+              <div class="queue-status">${escapeHtml(item.status)}</div>
+            </div>
+            <button class="btn btn-danger btn-small remove-queue" type="button" aria-label="Remove ${escapeHtml(item.file.name || 'photo')}">×</button>
+          </div>
+        `).join('');
+      }
+
+      function updateQueueStatus(id, status) {
+        const item = state.files.find(entry => entry.id === id);
+        if (item) item.status = status;
+        const card = els.queue.querySelector(`[data-queue-id="${CSS.escape(id)}"] .queue-status`);
+        if (card) card.textContent = status;
+      }
+
+      // Confirm that the browser loaded the external OCR library successfully.
+      async function ensureLibrariesLoaded() {
+        if (!window.Tesseract) {
+          throw new Error('The OCR library did not load. Check your internet connection and reload the page.');
+        }
+      }
+
+      // Create one reusable Tesseract worker; reusing it makes multi-image scans faster.
+      async function ensureWorker() {
+        if (state.worker) return state.worker;
+        await ensureLibrariesLoaded();
+
+        setStatus('Downloading OCR engine for the first scan…', 2);
+        state.worker = await window.Tesseract.createWorker('eng', 1, {
+          logger(message) {
+            if (!state.busy) return;
+            const progress = typeof message.progress === 'number' ? message.progress * 100 : 0;
+            const label = String(message.status || 'Working').replaceAll('_', ' ');
+            setStatus(label.charAt(0).toUpperCase() + label.slice(1), progress);
+          }
+        });
+
+        const sparseText = window.Tesseract?.PSM?.SPARSE_TEXT ?? 11;
+        await state.worker.setParameters({
+          tessedit_pageseg_mode: sparseText,
+          preserve_interword_spaces: '1'
+        });
+
+        return state.worker;
+      }
+
+      // Decode an image while respecting phone-camera orientation when supported.
+      async function loadImage(file) {
+        if ('createImageBitmap' in window) {
+          try {
+            return await createImageBitmap(file, { imageOrientation: 'from-image' });
+          } catch (error) {
+            console.warn('createImageBitmap failed; using Image fallback.', error);
+          }
+        }
+
+        return await new Promise((resolve, reject) => {
+          const img = new Image();
+          const url = URL.createObjectURL(file);
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('The selected image could not be opened.'));
+          };
+          img.src = url;
+        });
+      }
+
+      function getSourceDimensions(image) {
+        return {
+          width: image.naturalWidth || image.width,
+          height: image.naturalHeight || image.height
+        };
+      }
+
+      // Resize and enhance the image on a canvas before sending it to OCR.
+      async function prepareCanvas(file, mode) {
+        const image = await loadImage(file);
+        const source = getSourceDimensions(image);
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(source.width, source.height));
+        const width = Math.max(1, Math.round(source.width * scale));
+        const height = Math.max(1, Math.round(source.height * scale));
+
+        const canvas = els.workCanvas;
+        canvas.width = width;
+        canvas.height = height;
+
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        if (typeof image.close === 'function') image.close();
+        if (mode === 'original') return canvas;
+
+        const imageData = context.getImageData(0, 0, width, height);
+        const pixels = imageData.data;
+        const histogram = new Uint32Array(256);
+
+        for (let i = 0; i < pixels.length; i += 4) {
+          const gray = Math.round(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]);
+          pixels[i] = gray;
+          pixels[i + 1] = gray;
+          pixels[i + 2] = gray;
+          histogram[gray] += 1;
+        }
+
+        if (mode === 'binary') {
+          const threshold = calculateOtsuThreshold(histogram, width * height);
+          let whitePixels = 0;
+          for (let i = 0; i < pixels.length; i += 4) {
+            const value = pixels[i] >= threshold ? 255 : 0;
+            if (value === 255) whitePixels += 1;
+            pixels[i] = value;
+            pixels[i + 1] = value;
+            pixels[i + 2] = value;
+          }
+
+          // Tesseract generally performs better with dark text on a light background.
+          if (whitePixels < (width * height) / 2) {
+            for (let i = 0; i < pixels.length; i += 4) {
+              const inverted = 255 - pixels[i];
+              pixels[i] = inverted;
+              pixels[i + 1] = inverted;
+              pixels[i + 2] = inverted;
+            }
+          }
+        } else {
+          const total = width * height;
+          const low = histogramPercentile(histogram, total, 0.02);
+          const high = histogramPercentile(histogram, total, 0.98);
+          const range = Math.max(1, high - low);
+          let intensityTotal = 0;
+
+          for (let i = 0; i < pixels.length; i += 4) {
+            const stretched = Math.max(0, Math.min(255, Math.round((pixels[i] - low) * 255 / range)));
+            intensityTotal += stretched;
+            pixels[i] = stretched;
+            pixels[i + 1] = stretched;
+            pixels[i + 2] = stretched;
+          }
+
+          // Invert labels with a predominantly dark background and light lettering.
+          if (intensityTotal / total < 105) {
+            for (let i = 0; i < pixels.length; i += 4) {
+              const inverted = 255 - pixels[i];
+              pixels[i] = inverted;
+              pixels[i + 1] = inverted;
+              pixels[i + 2] = inverted;
+            }
+          }
+        }
+
+        context.putImageData(imageData, 0, 0);
+        return canvas;
+      }
+
+      // Histogram helpers calculate contrast limits and a binary threshold.
+      function histogramPercentile(histogram, total, percentile) {
+        const target = total * percentile;
+        let cumulative = 0;
+        for (let i = 0; i < histogram.length; i += 1) {
+          cumulative += histogram[i];
+          if (cumulative >= target) return i;
+        }
+        return percentile < 0.5 ? 0 : 255;
+      }
+
+      function calculateOtsuThreshold(histogram, total) {
+        let weightedSum = 0;
+        for (let i = 0; i < 256; i += 1) weightedSum += i * histogram[i];
+
+        let backgroundWeight = 0;
+        let backgroundSum = 0;
+        let bestVariance = -1;
+        let threshold = 128;
+
+        for (let i = 0; i < 256; i += 1) {
+          backgroundWeight += histogram[i];
+          if (backgroundWeight === 0) continue;
+
+          const foregroundWeight = total - backgroundWeight;
+          if (foregroundWeight === 0) break;
+
+          backgroundSum += i * histogram[i];
+          const backgroundMean = backgroundSum / backgroundWeight;
+          const foregroundMean = (weightedSum - backgroundSum) / foregroundWeight;
+          const difference = backgroundMean - foregroundMean;
+          const variance = backgroundWeight * foregroundWeight * difference * difference;
+
+          if (variance > bestVariance) {
+            bestVariance = variance;
+            threshold = i;
+          }
+        }
+
+        return threshold;
+      }
+
+      // Standardize punctuation and spacing so OCR output is easier to search.
+      function normalizeOcrText(text) {
+        return String(text || '')
+          .replace(/[‐‑‒–—]/g, '-')
+          .replace(/[“”]/g, '"')
+          .replace(/[‘’]/g, "'")
+          .replace(/\r/g, '')
+          .replace(/[\t ]+/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
+
+      // Build patterns for common part-number labels and OCR variations.
+      function getPartLabelRegex(mode, flags = 'i') {
+        if (mode === 'strict') {
+          return new RegExp('\\bP[A4]RT\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
+        }
+        return new RegExp('(?:\\bP[A4]RT\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM|#)|\\bP\\s*[/\\-]\\s*N\\b)\\s*[:;=#.\\-]?', flags);
+      }
+
+      // Build patterns for Serial No., Serial Number, Serial #, S/N, and SN labels.
+      function getSerialLabelRegex(mode, flags = 'i') {
+        if (mode === 'strict') {
+          return new RegExp('\\bSER(?:IAL|1AL)\\s+N(?:O|0)\\.?\\s*[:;=#.\\-]?', flags);
+        }
+        return new RegExp('(?:\\bSER(?:IAL|1AL)\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM|#)|\\bS\\s*[/\\-]\\s*N\\b|\\bS\\.?N\\.?\\s*[:=#])\\s*[:;=#.\\-]?', flags);
+      }
+
+      // Read the first valid identifier after a detected label and stop at the next field label.
+      function firstCandidate(segment, type) {
+        let stopped = String(segment || '').replace(/^\s*[:;=#.\-]+\s*/, '');
+        const stopRegex = type === 'part'
+          ? /\b(?:QTY|QUANTITY|SER(?:IAL|1AL)|S\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i
+          : /\b(?:QTY|QUANTITY|P[A4]RT|P\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
+        const stopMatch = stopRegex.exec(stopped);
+        if (stopMatch) stopped = stopped.slice(0, stopMatch.index);
+
+        const tokens = stopped.match(/[A-Z0-9][A-Z0-9._/\-]{1,59}/gi) || [];
+        for (const token of tokens) {
+          const candidate = type === 'serial' ? cleanSerialCandidate(token) : cleanPartCandidate(token);
+          if (candidate) return candidate;
+        }
+        return '';
+      }
+
+      function lineContainsAnyLabel(line, mode) {
+        return getPartLabelRegex(mode, 'i').test(line) || getSerialLabelRegex(mode, 'i').test(line);
+      }
+
+      // Search OCR lines and a flattened fallback for one category of label and value.
+      function extractValuesForLabel(normalizedText, mode, type) {
+        const lines = normalizedText.split('\n').map(line => line.trim()).filter(Boolean);
+        const values = [];
+        let labelFound = false;
+        const labelFactory = type === 'serial' ? getSerialLabelRegex : getPartLabelRegex;
+        const singleLabelRegex = labelFactory(mode, 'i');
+
+        for (let index = 0; index < lines.length; index += 1) {
+          const line = lines[index];
+          const match = singleLabelRegex.exec(line);
+          if (!match) continue;
+
+          labelFound = true;
+          const afterLabel = line.slice(match.index + match[0].length);
+          let candidate = firstCandidate(afterLabel, type);
+
+          if (!candidate) {
+            for (let lookAhead = index + 1; lookAhead < Math.min(lines.length, index + 3); lookAhead += 1) {
+              if (lineContainsAnyLabel(lines[lookAhead], mode)) break;
+              candidate = firstCandidate(lines[lookAhead], type);
+              if (candidate) break;
+            }
+          }
+
+          if (candidate) values.push(candidate);
+        }
+
+        const globalLabelRegex = labelFactory(mode, 'gi');
+        const flatText = normalizedText.replace(/\n+/g, ' ');
+        let globalMatch;
+        while ((globalMatch = globalLabelRegex.exec(flatText)) !== null) {
+          labelFound = true;
+          const start = globalMatch.index + globalMatch[0].length;
+          const remainder = flatText.slice(start, start + 110);
+          const candidate = firstCandidate(remainder, type);
+          if (candidate) values.push(candidate);
+          if (globalMatch.index === globalLabelRegex.lastIndex) globalLabelRegex.lastIndex += 1;
+        }
+
+        return { values: [...new Set(values)], labelFound };
+      }
+
+      // Extract both identifiers from the same OCR result so serials can be attached to their part.
+      function extractIdentifiers(text, mode = 'flexible') {
+        const normalizedText = normalizeOcrText(text);
+        const parts = extractValuesForLabel(normalizedText, mode, 'part');
+        const serials = extractValuesForLabel(normalizedText, mode, 'serial');
+
+        return {
+          partNumbers: parts.values,
+          serialNumbers: serials.values,
+          partLabelFound: parts.labelFound,
+          serialLabelFound: serials.labelFound,
+          normalizedText
+        };
+      }
+
+      // Compatibility helpers are exposed for browser-console extraction tests.
+      function extractPartNumbers(text, mode = 'flexible') {
+        const result = extractIdentifiers(text, mode);
+        return { values: result.partNumbers, labelFound: result.partLabelFound, normalizedText: result.normalizedText };
+      }
+
+      function extractSerialNumbers(text, mode = 'flexible') {
+        const result = extractIdentifiers(text, mode);
+        return { values: result.serialNumbers, labelFound: result.serialLabelFound, normalizedText: result.normalizedText };
+      }
+
+      // Add a new part or increase the quantity of an existing part, then group serials beneath it.
+      function addOrIncrementPart({ partNumber, serialNumbers = [], source, confidence = '', rawText = '', method = 'OCR', quantityIncrement = 1 }) {
+        const cleanedPart = cleanPartCandidate(partNumber);
+        if (!cleanedPart) return { added: false, reason: 'invalid' };
+
+        const timestamp = new Date().toISOString();
+        let part = state.results.find(result => result.partNumber.toUpperCase() === cleanedPart.toUpperCase());
+        const created = !part;
+
+        if (!part) {
+          part = {
+            id: makeId(),
+            partNumber: cleanedPart,
+            quantity: 0,
+            serials: [],
+            firstSeen: timestamp,
+            lastSeen: timestamp,
+            lastSource: source || 'Manual entry',
+            lastConfidence: confidence === '' ? '' : Math.round(Number(confidence) || 0),
+            lastRawText: String(rawText || '').slice(0, MAX_STORED_OCR_CHARS),
+            lastMethod: method
+          };
+          state.results.push(part);
+        }
+
+        part.quantity += Math.max(1, Math.floor(Number(quantityIncrement) || 1));
+        part.lastSeen = timestamp;
+        part.lastSource = source || part.lastSource;
+        part.lastConfidence = confidence === '' ? part.lastConfidence : Math.round(Number(confidence) || 0);
+        part.lastRawText = String(rawText || part.lastRawText || '').slice(0, MAX_STORED_OCR_CHARS);
+        part.lastMethod = method || part.lastMethod;
+
+        let serialsAdded = 0;
+        let serialsUpdated = 0;
+        const uniqueSerials = [...new Set(serialNumbers.map(cleanSerialCandidate).filter(Boolean))];
+        for (const serialNumber of uniqueSerials) {
+          const outcome = addSerialToPart(part, serialNumber, {
+            timestamp,
+            source: source || 'Manual entry',
+            confidence,
+            method
+          });
+          if (outcome.created) serialsAdded += 1;
+          else if (outcome.added) serialsUpdated += 1;
+        }
+
+        saveResults();
+        renderResults();
+        updateControls();
+        return { added: true, created, incremented: !created, serialsAdded, serialsUpdated, part };
+      }
+
+      function serialsForPart(partIndex, partCount, serialNumbers) {
+        if (partCount === 1) return serialNumbers;
+        if (serialNumbers.length === partCount && serialNumbers[partIndex]) return [serialNumbers[partIndex]];
+        return serialNumbers[partIndex] ? [serialNumbers[partIndex]] : [];
+      }
+
+      // Main scan pipeline: preprocess each photo, read both identifiers, and update grouped inventory.
+      async function scanSelectedFiles() {
+        if (state.busy || !state.files.length) return;
+        state.busy = true;
+        clearMessage();
+        updateControls();
+
+        let processedParts = 0;
+        let newParts = 0;
+        let quantityUpdates = 0;
+        let newSerials = 0;
+        let repeatedSerials = 0;
+        let noValueCount = 0;
+
+        try {
+          const worker = await ensureWorker();
+          const totalFiles = state.files.length;
+
+          for (let index = 0; index < totalFiles; index += 1) {
+            const item = state.files[index];
+            updateQueueStatus(item.id, 'Preparing image…');
+            setStatus(`Preparing photo ${index + 1} of ${totalFiles}`, index / totalFiles * 100);
+
+            const canvas = await prepareCanvas(item.file, els.imageMode.value);
+            updateQueueStatus(item.id, 'Reading text…');
+
+            const result = await worker.recognize(canvas);
+            const text = result?.data?.text || '';
+            const confidence = result?.data?.confidence ?? '';
+            const extracted = extractIdentifiers(text, els.labelMode.value);
+
+            if (extracted.partNumbers.length) {
+              let fileParts = 0;
+              let fileSerials = 0;
+
+              for (let partIndex = 0; partIndex < extracted.partNumbers.length; partIndex += 1) {
+                const partNumber = extracted.partNumbers[partIndex];
+                const attachedSerials = serialsForPart(partIndex, extracted.partNumbers.length, extracted.serialNumbers);
+                const outcome = addOrIncrementPart({
+                  partNumber,
+                  serialNumbers: attachedSerials,
+                  source: item.file.name || `Camera photo ${index + 1}`,
+                  confidence,
+                  rawText: extracted.normalizedText,
+                  method: 'OCR'
+                });
+
+                if (outcome.added) {
+                  processedParts += 1;
+                  fileParts += 1;
+                  if (outcome.created) newParts += 1;
+                  else quantityUpdates += 1;
+                  newSerials += outcome.serialsAdded;
+                  repeatedSerials += outcome.serialsUpdated;
+                  fileSerials += outcome.serialsAdded + outcome.serialsUpdated;
+                }
+              }
+
+              const serialStatus = fileSerials ? ` · ${fileSerials} serial${fileSerials === 1 ? '' : 's'}` : '';
+              updateQueueStatus(item.id, `Recorded ${fileParts} part${fileParts === 1 ? '' : 's'}${serialStatus}`);
+            } else if (extracted.partLabelFound) {
+              noValueCount += 1;
+              updateQueueStatus(item.id, 'Found “Part No.” but could not read its value');
+            } else if (extracted.serialNumbers.length || extracted.serialLabelFound) {
+              noValueCount += 1;
+              updateQueueStatus(item.id, 'Found a serial number but no readable part number');
+            } else {
+              noValueCount += 1;
+              updateQueueStatus(item.id, 'No supported part or serial label found');
+            }
+
+            setStatus(`Finished photo ${index + 1} of ${totalFiles}`, (index + 1) / totalFiles * 100);
+          }
+
+          if (processedParts > 0) {
+            let summary = `Recorded ${processedParts} item${processedParts === 1 ? '' : 's'}: ${newParts} new part${newParts === 1 ? '' : 's'} and ${quantityUpdates} quantity update${quantityUpdates === 1 ? '' : 's'}.`;
+            if (newSerials || repeatedSerials) summary += ` Added ${newSerials} new serial${newSerials === 1 ? '' : 's'} and updated ${repeatedSerials} existing serial${repeatedSerials === 1 ? '' : 's'}.`;
+            if (noValueCount) summary += ` Review ${noValueCount} photo${noValueCount === 1 ? '' : 's'} that did not produce a part number.`;
+            showMessage(summary, 'success');
+          } else {
+            showMessage('No part number was added. Try a closer, sharper photo or switch the image processing mode.', 'warn');
+          }
+
+          // Processed photos leave the queue; grouped inventory remains available for the next scan.
+          clearQueuedFiles();
+        } catch (error) {
+          console.error(error);
+          showMessage(error.message || 'The scan failed. Reload the page and try again.', 'error');
+        } finally {
+          state.busy = false;
+          hideStatus();
+          updateControls();
+        }
+      }
+
+      // Render each part as a parent record with quantity and nested serial-number records.
+      function renderResults() {
+        const partCount = state.results.length;
+        const totalQuantity = state.results.reduce((sum, result) => sum + result.quantity, 0);
+        const serialCount = state.results.reduce((sum, result) => sum + result.serials.length, 0);
+        els.resultCount.textContent = `${partCount} part${partCount === 1 ? '' : 's'} · ${totalQuantity} unit${totalQuantity === 1 ? '' : 's'} · ${serialCount} serial${serialCount === 1 ? '' : 's'}`;
+
+        if (!partCount) {
+          els.resultsList.innerHTML = `
+            <div class="empty-state">
+              No inventory records have been created.<br>
+              Scan label images or add a part and serial manually.
+            </div>
+          `;
+          return;
+        }
+
+        els.resultsList.innerHTML = state.results.map(result => `
+          <article class="result-card" data-result-id="${escapeHtml(result.id)}">
+            <div class="result-top">
+              <div class="result-field">
+                <label>Part number</label>
+                <input class="part-input" type="text" value="${escapeHtml(result.partNumber)}" aria-label="Editable part number">
+              </div>
+              <div class="result-field">
+                <label>Quantity</label>
+                <input class="quantity-input" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(result.quantity)}" aria-label="Quantity for ${escapeHtml(result.partNumber)}">
+              </div>
+              <button class="btn btn-danger btn-small delete-result" type="button" aria-label="Delete ${escapeHtml(result.partNumber)}">Delete</button>
+            </div>
+
+            <div class="result-meta">
+              <span>${escapeHtml(result.lastMethod)}</span>
+              <span>${escapeHtml(result.lastSource)}</span>
+              ${result.lastConfidence !== '' ? `<span>OCR confidence: ${escapeHtml(result.lastConfidence)}%</span>` : ''}
+              <span>Last scanned ${escapeHtml(formatDate(result.lastSeen))}</span>
+            </div>
+
+            <div class="serial-group">
+              <div class="serial-group-header">
+                <h3>Serial numbers</h3>
+                <span>${result.serials.length} unique</span>
+              </div>
+              ${result.serials.length ? `
+                <div class="serial-list">
+                  ${result.serials.map(serial => `
+                    <div class="serial-row" data-serial-id="${escapeHtml(serial.id)}">
+                      <input class="serial-input" type="text" value="${escapeHtml(serial.serialNumber)}" aria-label="Editable serial number">
+                      <span class="serial-count">${serial.quantity} scan${serial.quantity === 1 ? '' : 's'}</span>
+                      <button class="btn btn-danger btn-small delete-serial" type="button" aria-label="Remove serial ${escapeHtml(serial.serialNumber)}">Remove</button>
+                      <div class="serial-meta">${escapeHtml(serial.lastSource)} · ${escapeHtml(formatDate(serial.lastSeen))}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="no-serials">No serial number was detected for this part.</div>'}
+            </div>
+
+            ${result.lastRawText ? `
+              <details>
+                <summary>Show latest OCR text</summary>
+                <pre class="ocr-text">${escapeHtml(result.lastRawText)}</pre>
+              </details>
+            ` : ''}
+          </article>
+        `).join('');
+      }
+
+      // Manual entry follows the same grouping logic as scanned photos.
+      function addManualPart() {
+        const partNumber = els.manualPart.value;
+        const rawSerialNumber = els.manualSerial.value.trim();
+        const serialNumber = cleanSerialCandidate(rawSerialNumber);
+        if (rawSerialNumber && !serialNumber) {
+          showMessage('Enter a valid serial number containing at least one digit.', 'warn');
+          return;
+        }
+        const outcome = addOrIncrementPart({
+          partNumber,
+          serialNumbers: serialNumber ? [serialNumber] : [],
+          source: 'Manual entry',
+          method: 'Manual'
+        });
+
+        if (outcome.added) {
+          els.manualPart.value = '';
+          els.manualSerial.value = '';
+          showMessage(outcome.created ? 'New part record added.' : 'Existing part quantity increased.', 'success');
+        } else {
+          showMessage('Enter a valid part number containing at least one digit.', 'warn');
+        }
+      }
+
+      function mergePartRecords(target, source) {
+        target.quantity += source.quantity;
+        target.firstSeen = earlierDate(target.firstSeen, source.firstSeen);
+
+        if (new Date(source.lastSeen) >= new Date(target.lastSeen)) {
+          target.lastSeen = source.lastSeen;
+          target.lastSource = source.lastSource;
+          target.lastConfidence = source.lastConfidence;
+          target.lastRawText = source.lastRawText;
+          target.lastMethod = source.lastMethod;
+        }
+
+        for (const serial of source.serials) {
+          addSerialToPart(target, serial.serialNumber, {
+            firstSeen: serial.firstSeen,
+            lastSeen: serial.lastSeen,
+            source: serial.lastSource,
+            confidence: serial.lastConfidence,
+            method: serial.lastMethod
+          }, serial.quantity);
+        }
+      }
+
+      // Editing a part number into an existing value automatically merges both records.
+      function updatePartNumber(id, value) {
+        const result = state.results.find(entry => entry.id === id);
+        if (!result) return;
+        const cleaned = cleanPartCandidate(value);
+        if (!cleaned) {
+          showMessage('The edited part number must contain at least one digit and use letters, numbers, dots, slashes, underscores, or hyphens.', 'warn');
+          renderResults();
+          return;
+        }
+
+        const matchingPart = state.results.find(entry => entry.id !== id && entry.partNumber.toUpperCase() === cleaned.toUpperCase());
+        if (matchingPart) {
+          mergePartRecords(matchingPart, result);
+          state.results = state.results.filter(entry => entry.id !== id);
+          showMessage('The matching part records were merged and their quantities were combined.', 'success');
+        } else {
+          result.partNumber = cleaned;
+        }
+
+        saveResults();
+        renderResults();
+        updateControls();
+      }
+
+      function updateQuantity(id, value) {
+        const result = state.results.find(entry => entry.id === id);
+        if (!result) return;
+        const quantity = Math.floor(Number(value));
+        if (!Number.isFinite(quantity) || quantity < 1) {
+          showMessage('Quantity must be a whole number of at least 1.', 'warn');
+          renderResults();
+          return;
+        }
+        result.quantity = quantity;
+        saveResults();
+        renderResults();
+      }
+
+      // Editing a serial into an existing serial merges its scan count within the same part.
+      function updateSerialNumber(partId, serialId, value) {
+        const part = state.results.find(entry => entry.id === partId);
+        const serial = part?.serials.find(entry => entry.id === serialId);
+        if (!part || !serial) return;
+
+        const cleaned = cleanSerialCandidate(value);
+        if (!cleaned) {
+          showMessage('The edited serial number must contain at least one digit.', 'warn');
+          renderResults();
+          return;
+        }
+
+        const matchingSerial = part.serials.find(entry => entry.id !== serialId && entry.serialNumber.toUpperCase() === cleaned.toUpperCase());
+        if (matchingSerial) {
+          matchingSerial.quantity += serial.quantity;
+          matchingSerial.firstSeen = earlierDate(matchingSerial.firstSeen, serial.firstSeen);
+          if (new Date(serial.lastSeen) >= new Date(matchingSerial.lastSeen)) {
+            matchingSerial.lastSeen = serial.lastSeen;
+            matchingSerial.lastSource = serial.lastSource;
+            matchingSerial.lastConfidence = serial.lastConfidence;
+            matchingSerial.lastMethod = serial.lastMethod;
+          }
+          part.serials = part.serials.filter(entry => entry.id !== serialId);
+          showMessage('Matching serial records were merged.', 'success');
+        } else {
+          serial.serialNumber = cleaned;
+        }
+
+        saveResults();
+        renderResults();
+      }
+
+      function deleteResult(id) {
+        state.results = state.results.filter(result => result.id !== id);
+        saveResults();
+        renderResults();
+        updateControls();
+      }
+
+      function deleteSerial(partId, serialId) {
+        const part = state.results.find(result => result.id === partId);
+        if (!part) return;
+        part.serials = part.serials.filter(serial => serial.id !== serialId);
+        saveResults();
+        renderResults();
+      }
+
+      function clearAllResults() {
+        if (!state.results.length) return;
+        if (!window.confirm('Clear all part numbers, quantities, and serial numbers saved in this browser?')) return;
+        state.results = [];
+        saveResults();
+        renderResults();
+        updateControls();
+        showMessage('All saved inventory records were cleared.', 'info');
+      }
+
+      // Build one parent row per part and indented child rows for its serial-number subgroup.
+      function buildExportRows() {
+        const rows = [];
+        let partIndex = 0;
+
+        for (const part of state.results) {
+          partIndex += 1;
+          rows.push({
+            'Record Type': 'Part',
+            'Part Number': part.partNumber,
+            'Quantity': part.quantity,
+            'Serial Number': '',
+            'Serial Scan Count': '',
+            'First Scanned': part.firstSeen,
+            'Last Scanned': part.lastSeen,
+            'Source Image': part.lastSource,
+            'Method': part.lastMethod,
+            'OCR Confidence (%)': part.lastConfidence
+          });
+
+          for (const serial of part.serials) {
+            rows.push({
+              'Record Type': 'Serial',
+              'Part Number': part.partNumber,
+              'Quantity': '',
+              'Serial Number': serial.serialNumber,
+              'Serial Scan Count': serial.quantity,
+              'First Scanned': serial.firstSeen,
+              'Last Scanned': serial.lastSeen,
+              'Source Image': serial.lastSource,
+              'Method': serial.lastMethod,
+              'OCR Confidence (%)': serial.lastConfidence
+            });
+          }
+        }
+
+        return rows;
+      }
+
+      function dateStamp() {
+        const now = new Date();
+        const pad = value => String(value).padStart(2, '0');
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      }
+
+      // Create one Excel worksheet with part parent rows and grouped serial child rows.
+      function exportXlsx() {
+        if (!state.results.length) return;
+        if (!window.XLSX) {
+          showMessage('The Excel export library did not load. Use CSV export or reload while connected to the internet.', 'error');
+          return;
+        }
+
+        try {
+          const rows = buildExportRows();
+          const workbook = XLSX.utils.book_new();
+          const inventorySheet = XLSX.utils.json_to_sheet(rows);
+          inventorySheet['!cols'] = [
+            { wch: 13 }, { wch: 26 }, { wch: 11 }, { wch: 28 }, { wch: 18 },
+            { wch: 25 }, { wch: 25 }, { wch: 30 }, { wch: 12 }, { wch: 20 }
+          ];
+          inventorySheet['!rows'] = [{}, ...rows.map(row => ({ level: row['Record Type'] === 'Serial' ? 1 : 0 }))];
+          inventorySheet['!autofilter'] = { ref: inventorySheet['!ref'] };
+          inventorySheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+          XLSX.utils.book_append_sheet(workbook, inventorySheet, 'Inventory');
+          workbook.Workbook = { Views: [{ activeTab: 0 }] };
+
+          XLSX.writeFile(workbook, 'active-part-serial-inventory.xlsx', { compression: true });
+          const totalQuantity = state.results.reduce((sum, part) => sum + part.quantity, 0);
+          showMessage(`Excel workbook created with ${state.results.length} part record${state.results.length === 1 ? '' : 's'} and ${totalQuantity} total unit${totalQuantity === 1 ? '' : 's'}.`, 'success');
+        } catch (error) {
+          console.error(error);
+          showMessage('Excel export failed. Try the CSV button instead.', 'error');
+        }
+      }
+
+      // CSV export uses the same parent/child row order as the Excel worksheet.
+      function csvEscape(value) {
+        const valueText = String(value ?? '');
+        return /[",\n]/.test(valueText) ? `"${valueText.replaceAll('"', '""')}"` : valueText;
+      }
+
+      function exportCsv() {
+        if (!state.results.length) return;
+        const rows = buildExportRows();
+        const headers = Object.keys(rows[0]);
+        const csv = [
+          headers.map(csvEscape).join(','),
+          ...rows.map(row => headers.map(header => csvEscape(row[header])).join(','))
+        ].join('\n');
+
+        const blob = new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `part-serial-inventory-${dateStamp()}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showMessage('CSV file created. Check your browser downloads.', 'success');
+      }
+
+      // Connect all buttons, inputs, and editable parent/serial records to their handlers.
+      els.cameraInput.addEventListener('change', event => {
+        addFiles(event.target.files);
+        event.target.value = '';
+      });
+
+      els.galleryInput.addEventListener('change', event => {
+        addFiles(event.target.files);
+        event.target.value = '';
+      });
+
+      els.queue.addEventListener('click', event => {
+        const removeButton = event.target.closest('.remove-queue');
+        if (!removeButton || state.busy) return;
+        const card = removeButton.closest('[data-queue-id]');
+        if (card) removeQueuedFile(card.dataset.queueId);
+      });
+
+      els.scanButton.addEventListener('click', scanSelectedFiles);
+      els.manualAddButton.addEventListener('click', addManualPart);
+      [els.manualPart, els.manualSerial].forEach(input => {
+        input.addEventListener('keydown', event => {
+          if (event.key === 'Enter') addManualPart();
+        });
+      });
+      els.clearButton.addEventListener('click', clearAllResults);
+      els.exportXlsxButton.addEventListener('click', exportXlsx);
+      els.exportCsvButton.addEventListener('click', exportCsv);
+
+      els.resultsList.addEventListener('click', event => {
+        const partCard = event.target.closest('[data-result-id]');
+        if (!partCard) return;
+
+        if (event.target.closest('.delete-result')) {
+          deleteResult(partCard.dataset.resultId);
+          return;
+        }
+
+        const serialButton = event.target.closest('.delete-serial');
+        const serialRow = serialButton?.closest('[data-serial-id]');
+        if (serialRow) deleteSerial(partCard.dataset.resultId, serialRow.dataset.serialId);
+      });
+
+      els.resultsList.addEventListener('change', event => {
+        const partCard = event.target.closest('[data-result-id]');
+        if (!partCard) return;
+
+        if (event.target.classList.contains('part-input')) {
+          updatePartNumber(partCard.dataset.resultId, event.target.value);
+          return;
+        }
+
+        if (event.target.classList.contains('quantity-input')) {
+          updateQuantity(partCard.dataset.resultId, event.target.value);
+          return;
+        }
+
+        if (event.target.classList.contains('serial-input')) {
+          const serialRow = event.target.closest('[data-serial-id]');
+          if (serialRow) updateSerialNumber(partCard.dataset.resultId, serialRow.dataset.serialId, event.target.value);
+        }
+      });
+
+      // Clean up temporary image URLs and stop the OCR worker before leaving the page.
+      window.addEventListener('beforeunload', () => {
+        clearQueuedFiles();
+        if (state.worker) state.worker.terminate().catch(() => {});
+      });
+
+      // Extraction helpers are available for quick browser-console tests.
+      window.PartScannerDebug = { extractPartNumbers, extractSerialNumbers, extractIdentifiers };
+
+      // Initial render restores saved inventory and prepares the interface.
+      renderQueue();
+      renderResults();
+      updateControls();
+    })();
+  </script>
+</body>
+</html>
