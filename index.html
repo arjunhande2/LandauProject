@@ -137,8 +137,12 @@
       font-size: 0.69rem;
       font-weight: 600;
       letter-spacing: 0.13em;
+      text-decoration: none;
       text-transform: uppercase;
+      transition: color 150ms ease;
     }
+
+    .header-status:hover { color: var(--charcoal); }
 
     .status-indicator {
       width: 8px;
@@ -794,6 +798,8 @@
       border-top: 1px solid var(--grey-200);
     }
 
+    .database-link { grid-column: 1 / -1; }
+
     .site-footer {
       width: min(1180px, calc(100% - 32px));
       margin: 0 auto;
@@ -870,10 +876,10 @@
         <span class="wordmark-subtitle">Data capture and export</span>
       </div>
 
-      <div class="header-status">
+      <a class="header-status" href="database.html" target="_blank" rel="noopener">
         <span class="status-indicator" aria-hidden="true"></span>
-        Local processing
-      </div>
+        Inventory database
+      </a>
     </div>
   </header>
 
@@ -967,7 +973,7 @@
 
           <div class="privacy-note">
             <div class="privacy-icon" aria-hidden="true">✓</div>
-            <div>Image recognition runs in this browser. Selected photos are not sent to a custom application server.</div>
+            <div>Image recognition runs in this browser. Only inventory records are uploaded when an authorized user chooses to sync them from the database portal.</div>
           </div>
         </div>
       </section>
@@ -996,6 +1002,10 @@
               Download Excel workbook
             </button>
             <button id="exportCsvButton" class="btn btn-secondary" type="button" disabled>Export CSV</button>
+            <a class="btn btn-secondary database-link" href="database.html" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="7.5" ry="3"></ellipse><path d="M4.5 5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V5"></path><path d="M4.5 11v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"></path></svg>
+              Open inventory database
+            </a>
           </div>
         </div>
       </section>
@@ -1071,19 +1081,38 @@
         return new Date(first) >= new Date(second) ? first : second;
       }
 
-      // Validate part and serial values while allowing common industrial identifier punctuation.
+      // Validate part and serial values while preserving complete industrial and hexadecimal identifiers.
       function cleanIdentifier(raw, type = 'part') {
-        const value = String(raw || '')
+        let value = String(raw || '')
           .toUpperCase()
+          .replace(/[‐‑‒–—]/g, '-')
+          .trim();
+
+        if (type === 'serial') {
+          value = value
+            .replace(/^\s*(?:HEX(?:ADECIMAL)?)\s*[:=]?\s*/i, '')
+            .replace(/^[^A-Z0-9]+/, '')
+            .replace(/[^A-Z0-9._/:\s-]+$/, '')
+            .replace(/\s*([._/:-])\s*/g, '$1')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          if (value.length < 2 || value.length > 120) return '';
+          if (!/^[A-Z0-9][A-Z0-9._/: -]*$/.test(value)) return '';
+          if (!/[A-Z0-9]/.test(value)) return '';
+          if (/^(NO|NUMBER|NUM|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION|HEX|HEXADECIMAL)$/.test(value)) return '';
+          return value;
+        }
+
+        value = value
           .replace(/^[^A-Z0-9]+/, '')
-          .replace(/[^A-Z0-9._/\-]+$/, '')
+          .replace(/[^A-Z0-9._/-]+$/, '')
           .replace(/\.{2,}/g, '.')
           .trim();
 
-        const maximumLength = type === 'serial' ? 60 : 40;
-        if (value.length < 2 || value.length > maximumLength) return '';
+        if (value.length < 2 || value.length > 40) return '';
         if (!/\d/.test(value)) return '';
-        if (!/^[A-Z0-9][A-Z0-9._/\-]*$/.test(value)) return '';
+        if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(value)) return '';
         if (/^(NO|NUMBER|NUM|PART|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION)$/.test(value)) return '';
         return value;
       }
@@ -1096,6 +1125,11 @@
         return cleanIdentifier(raw, 'serial');
       }
 
+      // Ignore formatting separators when deciding whether two serial values are identical.
+      function serialCanonicalKey(value) {
+        return cleanSerialCandidate(value).replace(/[^A-Z0-9]/g, '');
+      }
+
       // Add or merge one serial record beneath its parent part record.
       function addSerialToPart(part, serialNumber, metadata = {}, quantityIncrement = 1) {
         const cleaned = cleanSerialCandidate(serialNumber);
@@ -1103,7 +1137,8 @@
 
         const timestamp = validIsoDate(metadata.lastSeen || metadata.timestamp);
         const firstSeen = validIsoDate(metadata.firstSeen || metadata.timestamp || timestamp, timestamp);
-        let serial = part.serials.find(entry => entry.serialNumber.toUpperCase() === cleaned.toUpperCase());
+        const cleanedKey = serialCanonicalKey(cleaned);
+        let serial = part.serials.find(entry => serialCanonicalKey(entry.serialNumber) === cleanedKey);
         const created = !serial;
 
         if (!serial) {
@@ -1558,21 +1593,63 @@
         return new RegExp('(?:\\bSER(?:IAL|1AL)\\s*(?:N(?:O|0|Q)\\.?|NUMBER|NUM|#)|\\bS\\s*[/\\-]\\s*N\\b|\\bS\\.?N\\.?\\s*[:=#])\\s*[:;=#.\\-]?', flags);
       }
 
+      // Decide whether a token is likely to be part of a full serial value.
+      function isSerialChunk(token) {
+        const compact = String(token || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        if (!compact || compact.length > 64) return false;
+        if (/^(NO|NUMBER|NUM|QTY|QUANTITY|DATE|LOT|SERIAL|MODEL|DESC|DESCRIPTION|MADE|CANADA|USA)$/.test(compact)) return false;
+        return /\d/.test(compact) || /[._/:-]/.test(token) || /^(?:0X)?[A-F0-9]{2,}$/.test(compact);
+      }
+
+      // Read the complete serial sequence after a label, including grouped or hexadecimal values.
+      function fullSerialCandidate(segment) {
+        let stopped = String(segment || '').replace(/^\s*[:;=#.-]+\s*/, '');
+        const stopRegex = /\b(?:QTY|QUANTITY|P[A4]RT|P\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
+        const stopMatch = stopRegex.exec(stopped);
+        if (stopMatch) stopped = stopped.slice(0, stopMatch.index);
+        stopped = stopped.replace(/^\s*(?:HEX(?:ADECIMAL)?)\s*[:=]?\s*/i, '');
+
+        const tokens = stopped.match(/[A-Z0-9]+(?:[._/:\-][A-Z0-9]+)*/gi) || [];
+        const accepted = [];
+        for (const token of tokens) {
+          if (!isSerialChunk(token)) {
+            if (accepted.length) break;
+            continue;
+          }
+          accepted.push(token);
+        }
+
+        return cleanSerialCandidate(accepted.join(' '));
+      }
+
       // Read the first valid identifier after a detected label and stop at the next field label.
       function firstCandidate(segment, type) {
-        let stopped = String(segment || '').replace(/^\s*[:;=#.\-]+\s*/, '');
-        const stopRegex = type === 'part'
-          ? /\b(?:QTY|QUANTITY|SER(?:IAL|1AL)|S\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i
-          : /\b(?:QTY|QUANTITY|P[A4]RT|P\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
+        if (type === 'serial') return fullSerialCandidate(segment);
+
+        let stopped = String(segment || '').replace(/^\s*[:;=#.-]+\s*/, '');
+        const stopRegex = /\b(?:QTY|QUANTITY|SER(?:IAL|1AL)|S\s*[/\-]\s*N|LOT|DATE|DESCRIPTION|DESC|MODEL|MFG)\b/i;
         const stopMatch = stopRegex.exec(stopped);
         if (stopMatch) stopped = stopped.slice(0, stopMatch.index);
 
         const tokens = stopped.match(/[A-Z0-9][A-Z0-9._/\-]{1,59}/gi) || [];
         for (const token of tokens) {
-          const candidate = type === 'serial' ? cleanSerialCandidate(token) : cleanPartCandidate(token);
+          const candidate = cleanPartCandidate(token);
           if (candidate) return candidate;
         }
         return '';
+      }
+
+      // Continue a serial onto following OCR lines only when those lines contain serial-like chunks.
+      function extendSerialAcrossLines(lines, startIndex, initialSegment, mode) {
+        let combined = String(initialSegment || '').trim();
+        for (let lookAhead = startIndex + 1; lookAhead < Math.min(lines.length, startIndex + 4); lookAhead += 1) {
+          const nextLine = lines[lookAhead];
+          if (lineContainsAnyLabel(nextLine, mode)) break;
+          const continuation = fullSerialCandidate(nextLine);
+          if (!continuation) break;
+          combined = `${combined} ${continuation}`.trim();
+        }
+        return fullSerialCandidate(combined);
       }
 
       function lineContainsAnyLabel(line, mode) {
@@ -1594,12 +1671,16 @@
 
           labelFound = true;
           const afterLabel = line.slice(match.index + match[0].length);
-          let candidate = firstCandidate(afterLabel, type);
+          let candidate = type === 'serial'
+            ? extendSerialAcrossLines(lines, index, afterLabel, mode)
+            : firstCandidate(afterLabel, type);
 
           if (!candidate) {
-            for (let lookAhead = index + 1; lookAhead < Math.min(lines.length, index + 3); lookAhead += 1) {
+            for (let lookAhead = index + 1; lookAhead < Math.min(lines.length, index + 4); lookAhead += 1) {
               if (lineContainsAnyLabel(lines[lookAhead], mode)) break;
-              candidate = firstCandidate(lines[lookAhead], type);
+              candidate = type === 'serial'
+                ? extendSerialAcrossLines(lines, lookAhead, lines[lookAhead], mode)
+                : firstCandidate(lines[lookAhead], type);
               if (candidate) break;
             }
           }
@@ -1682,7 +1763,12 @@
 
         let serialsAdded = 0;
         let serialsUpdated = 0;
-        const uniqueSerials = [...new Set(serialNumbers.map(cleanSerialCandidate).filter(Boolean))];
+        const serialMap = new Map();
+        for (const value of serialNumbers.map(cleanSerialCandidate).filter(Boolean)) {
+          const key = serialCanonicalKey(value);
+          if (key && !serialMap.has(key)) serialMap.set(key, value);
+        }
+        const uniqueSerials = [...serialMap.values()];
         for (const serialNumber of uniqueSerials) {
           const outcome = addSerialToPart(part, serialNumber, {
             timestamp,
@@ -1874,7 +1960,7 @@
         const rawSerialNumber = els.manualSerial.value.trim();
         const serialNumber = cleanSerialCandidate(rawSerialNumber);
         if (rawSerialNumber && !serialNumber) {
-          showMessage('Enter a valid serial number containing at least one digit.', 'warn');
+          showMessage('Enter a valid serial number using letters, digits, spaces, or standard separators.', 'warn');
           return;
         }
         const outcome = addOrIncrementPart({
@@ -1963,12 +2049,13 @@
 
         const cleaned = cleanSerialCandidate(value);
         if (!cleaned) {
-          showMessage('The edited serial number must contain at least one digit.', 'warn');
+          showMessage('The edited serial number must use letters, digits, spaces, or standard separators.', 'warn');
           renderResults();
           return;
         }
 
-        const matchingSerial = part.serials.find(entry => entry.id !== serialId && entry.serialNumber.toUpperCase() === cleaned.toUpperCase());
+        const cleanedKey = serialCanonicalKey(cleaned);
+        const matchingSerial = part.serials.find(entry => entry.id !== serialId && serialCanonicalKey(entry.serialNumber) === cleanedKey);
         if (matchingSerial) {
           matchingSerial.quantity += serial.quantity;
           matchingSerial.firstSeen = earlierDate(matchingSerial.firstSeen, serial.firstSeen);
@@ -2186,7 +2273,11 @@
       });
 
       // Extraction helpers are available for quick browser-console tests.
-      window.PartScannerDebug = { extractPartNumbers, extractSerialNumbers, extractIdentifiers };
+      window.PartScannerDebug = { extractPartNumbers, extractSerialNumbers, extractIdentifiers, serialCanonicalKey };
+      window.PartScannerCloud = {
+        storageKey: STORAGE_KEY,
+        getInventory: () => JSON.parse(JSON.stringify(state.results))
+      };
 
       // Initial render restores saved inventory and prepares the interface.
       renderQueue();
